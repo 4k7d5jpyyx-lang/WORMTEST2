@@ -1,14 +1,15 @@
 (() => {
   "use strict";
 
-  // ---------- Tiny on-screen debug so you can see if JS is running ----------
+  // ---------- On-screen debug ----------
   const dbg = document.createElement("div");
   dbg.style.cssText = `
     position:fixed; left:10px; top:10px; z-index:999999;
-    padding:8px 10px; border-radius:10px;
+    padding:8px 10px; border-radius:12px;
     background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.18);
     color:rgba(235,240,248,.92); font:600 12px/1.2 system-ui, -apple-system, Inter, sans-serif;
     backdrop-filter: blur(10px);
+    max-width: 78vw;
   `;
   dbg.textContent = "JS LOADED ✓";
   document.body.appendChild(dbg);
@@ -18,29 +19,29 @@
     dbg.style.background = "rgba(120,0,20,.55)";
     console.error(e);
   }
-
   window.addEventListener("error", (ev) => showErr(ev.error || ev.message));
   window.addEventListener("unhandledrejection", (ev) => showErr(ev.reason));
 
   // ---------- Helpers ----------
   const $ = (id) => document.getElementById(id);
-  const fmtMoney = (n) =>
-    "$" + Math.round(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const fmt = (n) => "$" + Math.max(0, Math.round(n)).toLocaleString();
 
-  // ---------- Grab DOM safely ----------
-  const canvas = $("simCanvas") || $("c"); // supports either id
-  if (!canvas) {
-    showErr("Canvas not found (expected #simCanvas or #c)");
-    return;
-  }
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const randi = (a, b) => Math.floor(rand(a, b + 1));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const dist2 = (ax, ay, bx, by) => {
+    const dx = ax - bx, dy = ay - by;
+    return dx * dx + dy * dy;
+  };
+
+  // ---------- DOM ----------
+  const canvas = $("simCanvas") || $("c");
+  if (!canvas) return showErr("Canvas not found (expected #simCanvas).");
 
   const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
-  if (!ctx) {
-    showErr("Canvas context failed");
-    return;
-  }
+  if (!ctx) return showErr("Canvas context failed.");
 
-  // Optional stat IDs (won't crash if missing)
   const elBuyers = $("buyers");
   const elVolume = $("volume");
   const elMcap = $("mcap");
@@ -48,587 +49,672 @@
   const elWorms = $("worms");
   const logEl = $("log");
 
-  // ---------- iOS-safe canvas sizing ----------
-  let W = 1,
-    H = 1,
-    DPR = 1;
-
-  function resizeCanvas() {
-    const rect = canvas.getBoundingClientRect();
-    DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
-    W = Math.max(1, rect.width);
-    H = Math.max(1, rect.height);
-
-    canvas.width = Math.floor(W * DPR);
-    canvas.height = Math.floor(H * DPR);
-
-    // Draw in CSS pixels:
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  }
-
-  // Run resize at the right times
-  window.addEventListener("resize", resizeCanvas, { passive: true });
-  window.addEventListener("orientationchange", () =>
-    setTimeout(resizeCanvas, 100)
-  );
-  // IMPORTANT: load guarantees layout is ready
-  window.addEventListener("load", () => {
-    resizeCanvas();
-    // prove rendering works
-    dbg.textContent = "JS LOADED ✓ (rendering)";
-  });
-
-  // In case load already happened
-  setTimeout(resizeCanvas, 0);
-
-  // ---------- Simulation State ----------
-  let buyers = 0;
-  let volume = 0;
-  let mcap = 0;
-
-  const MAX_COLONIES = 8;
-  const MC_STEP = 50000; // spawn new colony each $50k
-  let nextSplitAt = MC_STEP;
-
-  // Log with cap + spam merge
-  const LOG_CAP = 40;
+  // ---------- Log (cap + spam merge) ----------
+  const LOG_CAP = 45;
   let lastLog = { msg: "", t: 0, count: 0 };
-
   function log(msg, kind = "INFO") {
-    const now = Date.now();
     if (!logEl) return;
-
-    // merge spam if same msg within 1.5s
-    if (msg === lastLog.msg && now - lastLog.t < 1500) {
+    const now = Date.now();
+    if (msg === lastLog.msg && now - lastLog.t < 1300) {
       lastLog.count++;
       const top = logEl.firstChild;
       if (top) top.textContent = `${kind}: ${msg} (x${lastLog.count})`;
       lastLog.t = now;
       return;
     }
-
     lastLog = { msg, t: now, count: 1 };
-
     const d = document.createElement("div");
     d.textContent = `${kind}: ${msg}`;
     logEl.prepend(d);
+    while (logEl.children.length > LOG_CAP) logEl.removeChild(logEl.lastChild);
+  }
 
-    while (logEl.children.length > LOG_CAP) {
-      logEl.removeChild(logEl.lastChild);
+  // ---------- Canvas sizing (iOS safe) ----------
+  let W = 1, H = 1, DPR = 1;
+  function resizeCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    W = Math.max(1, rect.width);
+    H = Math.max(1, rect.height);
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener("resize", resizeCanvas, { passive: true });
+  window.addEventListener("orientationchange", () => setTimeout(resizeCanvas, 120));
+  setTimeout(resizeCanvas, 0);
+
+  // ---------- Economy / triggers ----------
+  let buyers = 0;
+  let volume = 0;
+  let mcap = 0;
+
+  const MAX_COLONIES = 8;
+  const MC_STEP = 50000;
+  let nextSplitAt = MC_STEP;
+  let bossSpawned = false;
+
+  // Growth score drives worm count, limb growth, aggression, etc.
+  function growthScore() {
+    // weighted so MC matters most, then volume, then buyers
+    return (mcap / 20000) + (volume / 6000) + (buyers / 10);
+  }
+
+  // ---------- Camera + interaction ----------
+  let camX = 0, camY = 0, zoom = 1;
+  let dragging = false, lastX = 0, lastY = 0;
+  let selected = 0;
+  let focusOn = false;
+
+  function toWorld(px, py) {
+    return {
+      x: (px - W / 2) / zoom - camX,
+      y: (py - H / 2) / zoom - camY
+    };
+  }
+
+  function pickColony(wx, wy) {
+    let best = -1, bestD = Infinity;
+    for (let i = 0; i < colonies.length; i++) {
+      const c = colonies[i];
+      const d = dist2(wx, wy, c.x, c.y);
+      if (d < bestD) { bestD = d; best = i; }
     }
+    // select only if reasonably close
+    return (best !== -1 && bestD < 260 * 260) ? best : -1;
   }
 
-  // Colony / Worm model: irregular “noodle” with segments and drifting
-  function rand(a, b) {
-    return a + Math.random() * (b - a);
+  // pointer events
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture?.(e.pointerId);
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+  }, { passive: true });
+
+  canvas.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    camX += dx / zoom;
+    camY += dy / zoom;
+  }, { passive: true });
+
+  canvas.addEventListener("pointerup", (e) => {
+    dragging = false;
+    const w = toWorld(e.clientX, e.clientY);
+    const idx = pickColony(w.x, w.y);
+    if (idx !== -1) {
+      selected = idx;
+      log(`Selected Colony #${idx + 1}`, "INFO");
+      if (focusOn) centerOnSelected(true);
+    }
+  }, { passive: true });
+
+  // pinch zoom
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const k = e.deltaY > 0 ? 0.92 : 1.08;
+    zoom = clamp(zoom * k, 0.6, 2.6);
+  }, { passive: false });
+
+  // double tap center
+  let lastTap = 0;
+  canvas.addEventListener("touchend", (e) => {
+    const now = Date.now();
+    if (now - lastTap < 280) centerOnSelected(false);
+    lastTap = now;
+  }, { passive: true });
+
+  function centerOnSelected(smooth = true) {
+    const c = colonies[selected];
+    if (!c) return;
+    if (!smooth) {
+      camX = -c.x;
+      camY = -c.y;
+      return;
+    }
+    camX = lerp(camX, -c.x, 0.18);
+    camY = lerp(camY, -c.y, 0.18);
   }
 
-  function newColony(x, y, seedHue = rand(0, 360)) {
+  // ---------- Colony / worm models ----------
+  function newColony(x, y, hue = rand(0, 360)) {
     const dna = {
-      hue: seedHue,
-      drift: rand(0.4, 1.3),
-      chaos: rand(0.4, 1.2),
-      aura: rand(0.6, 1.4),
-      limbiness: rand(0.2, 1.0),
+      hue,
+      chaos: rand(0.55, 1.35),
+      drift: rand(0.55, 1.35),
+      aura: rand(0.9, 1.6),
+      limbiness: rand(0.25, 1.1),
+      temperament: ["CALM", "AGGRESSIVE", "CHAOTIC", "TOXIC"][randi(0, 3)],
+      biome: ["NEON GARDEN", "DEEP SEA", "VOID BLOOM", "GLASS CAVE", "ARC STORM"][randi(0, 4)],
+      style: ["COMET", "CROWN", "ARC", "SPIRAL", "DRIFT"][randi(0, 4)]
     };
 
+    // irregular blob field: several metaball “nodes”
+    const nodes = Array.from({ length: randi(4, 7) }, () => ({
+      ox: rand(-70, 70),
+      oy: rand(-70, 70),
+      r: rand(50, 110),
+      ph: rand(0, Math.PI * 2),
+      sp: rand(0.4, 1.2)
+    }));
+
     return {
-      x,
-      y,
-      vx: rand(-0.2, 0.2),
-      vy: rand(-0.2, 0.2),
-      zoom: 1,
+      id: Math.random().toString(16).slice(2, 6).toUpperCase(),
+      x, y,
+      vx: rand(-0.18, 0.18),
+      vy: rand(-0.18, 0.18),
       dna,
+      nodes,
       worms: [],
-      shockwaves: [],
-      id: Math.random().toString(16).slice(2, 6),
+      shock: []
     };
   }
 
   function newWorm(col, big = false) {
-    const segCount = big ? Math.floor(rand(18, 28)) : Math.floor(rand(10, 18));
+    const type = ["DRIFTER", "ORBITER", "HUNTER"][randi(0, 2)];
+    const segCount = big ? randi(18, 28) : randi(10, 18);
     const baseLen = big ? rand(10, 16) : rand(7, 12);
+    const hue = (col.dna.hue + rand(-70, 70) + 360) % 360;
 
-    const hueShift = rand(-35, 35);
-    const hue = (col.dna.hue + hueShift + 360) % 360;
-
-    const worm = {
+    const w = {
       id: Math.random().toString(16).slice(2, 6),
+      type,
       hue,
-      width: big ? rand(6, 10) : rand(4, 7),
-      speed: big ? rand(0.35, 0.7) : rand(0.45, 0.95),
+      width: big ? rand(7, 11) : rand(4.2, 7),
+      speed: big ? rand(0.38, 0.75) : rand(0.5, 1.05),
       turn: rand(0.008, 0.02) * col.dna.chaos,
       phase: rand(0, Math.PI * 2),
-      segs: [],
       limbs: [],
-      alive: true,
+      segs: [],
+      isBoss: false
     };
 
-    // start near colony core
-    let px = col.x + rand(-40, 40);
-    let py = col.y + rand(-40, 40);
+    let px = col.x + rand(-55, 55);
+    let py = col.y + rand(-55, 55);
     let ang = rand(0, Math.PI * 2);
 
     for (let i = 0; i < segCount; i++) {
-      worm.segs.push({
-        x: px,
-        y: py,
-        a: ang,
-        len: baseLen * rand(0.85, 1.2),
-      });
+      w.segs.push({ x: px, y: py, a: ang, len: baseLen * rand(0.85, 1.22) });
       px -= Math.cos(ang) * baseLen;
       py -= Math.sin(ang) * baseLen;
-      ang += rand(-0.25, 0.25) * col.dna.chaos;
+      ang += rand(-0.3, 0.3) * col.dna.chaos;
     }
 
-    return worm;
+    return w;
   }
 
-  // Build initial colony
-  const colonies = [newColony(0, 0, 160)];
+  const colonies = [newColony(0, 0, 150)];
   colonies[0].worms.push(newWorm(colonies[0], false));
   colonies[0].worms.push(newWorm(colonies[0], false));
   colonies[0].worms.push(newWorm(colonies[0], true));
 
-  // Boss worm hook: becomes active once MC passes 50k
-  let bossSpawned = false;
+  // ---------- Events / mechanics ----------
+  function shockwave(col, strength = 1) {
+    col.shock.push({ r: 0, v: 2.6 + strength * 1.2, a: 0.85, w: 2 + strength });
+  }
 
   function ensureBoss() {
     if (bossSpawned) return;
     if (mcap >= 50000) {
       const c = colonies[0];
       const boss = newWorm(c, true);
+      boss.isBoss = true;
       boss.width *= 1.6;
       boss.speed *= 0.7;
-      boss.hue = 120; // neon green boss vibe
-      boss.isBoss = true;
+      boss.hue = 120;
+      // give boss some limbs
+      for (let i = 0; i < 4; i++) addLimb(boss, c, true);
       c.worms.push(boss);
       bossSpawned = true;
-      c.shockwaves.push({ x: c.x, y: c.y, r: 0, v: 3.2, a: 0.85 });
+      shockwave(c, 1.4);
       log("Boss worm emerged", "EVENT");
     }
   }
 
-  // Spawn new colony each 50k mcap increment, cap at 8
   function trySplitByMcap() {
     while (mcap >= nextSplitAt && colonies.length < MAX_COLONIES) {
       const base = colonies[0];
-      const angle = rand(0, Math.PI * 2);
-      const dist = rand(180, 320);
-
+      const ang = rand(0, Math.PI * 2);
+      const dist = rand(220, 360);
       const nc = newColony(
-        base.x + Math.cos(angle) * dist,
-        base.y + Math.sin(angle) * dist,
-        (base.dna.hue + rand(-60, 60) + 360) % 360
+        base.x + Math.cos(ang) * dist,
+        base.y + Math.sin(ang) * dist,
+        (base.dna.hue + rand(-70, 70) + 360) % 360
       );
 
-      // give it starter worms
-      nc.worms.push(newWorm(nc, false));
-      nc.worms.push(newWorm(nc, false));
-      if (Math.random() < 0.35) nc.worms.push(newWorm(nc, true));
+      // starter worms scale a bit with growth
+      const g = growthScore();
+      const starters = clamp(Math.floor(2 + g / 2), 2, 6);
+      for (let i = 0; i < starters; i++) nc.worms.push(newWorm(nc, Math.random() < 0.25));
 
-      // shockwave on spawn
-      nc.shockwaves.push({ x: nc.x, y: nc.y, r: 0, v: 3.6, a: 0.9 });
-
+      shockwave(nc, 1.1);
       colonies.push(nc);
-      log(`New colony spawned at $${nextSplitAt.toLocaleString()} MC`, "EVENT");
+
+      log(`New colony spawned at ${fmt(nextSplitAt)} MC`, "EVENT");
       nextSplitAt += MC_STEP;
     }
   }
 
-  // ---------- Controls (won't crash if buttons missing) ----------
-  function bindAction(action, fn) {
+  function addLimb(w, col, big = false) {
+    if (!w.segs.length) return;
+    const at = randi(2, w.segs.length - 3);
+    w.limbs.push({
+      at,
+      len: big ? rand(35, 90) : rand(22, 70),
+      ang: rand(-1.3, 1.3),
+      wob: rand(0.7, 1.6)
+    });
+  }
+
+  function mutateRandom() {
+    const c = colonies[randi(0, colonies.length - 1)];
+    if (!c?.worms?.length) return;
+    const w = c.worms[randi(0, c.worms.length - 1)];
+    const r = Math.random();
+
+    if (r < 0.36) {
+      w.hue = (w.hue + rand(30, 110)) % 360;
+      log(`Color shift • Worm ${w.id} (Colony #${colonies.indexOf(c) + 1})`, "MUTATION");
+    } else if (r < 0.62) {
+      w.speed *= rand(1.05, 1.25);
+      log(`Aggression spike • Worm ${w.id}`, "MUTATION");
+    } else if (r < 0.82) {
+      w.width = clamp(w.width * rand(1.05, 1.25), 3.5, 16);
+      log(`Body growth • Worm ${w.id}`, "MUTATION");
+    } else {
+      addLimb(w, c, Math.random() < 0.25);
+      log(`Limb growth • Worm ${w.id}`, "MUTATION");
+    }
+
+    if (Math.random() < 0.22) shockwave(c, 0.9);
+  }
+
+  // Auto mutations based on activity
+  let mutTimer = 0;
+
+  // Worm population grows with activity
+  let spawnTimer = 0;
+
+  function maybeSpawnWorms(dt) {
+    const g = growthScore();
+    const target = clamp(Math.floor(3 + g * 2.2), 3, 80);
+
+    const total = colonies.reduce((a, c) => a + c.worms.length, 0);
+    if (total >= target) return;
+
+    spawnTimer += dt;
+    const rate = clamp(1.2 - g * 0.04, 0.15, 1.2); // faster with growth
+    if (spawnTimer >= rate) {
+      spawnTimer = 0;
+      const c = colonies[selected] || colonies[0];
+      c.worms.push(newWorm(c, Math.random() < 0.18));
+      if (Math.random() < 0.35) shockwave(c, 0.6);
+      log("New worm hatched", "INFO");
+    }
+  }
+
+  // ---------- Controls ----------
+  function bind(action, fn) {
     const btn = document.querySelector(`button[data-action="${action}"]`);
     if (btn) btn.addEventListener("click", fn);
   }
 
-  bindAction("feed", () => {
-    volume += rand(30, 90);
-    mcap += rand(150, 450);
-    log("Feed + growth", "INFO");
+  bind("feed", () => {
+    volume += rand(20, 90);
+    mcap += rand(120, 460);
+    log("Feed + nutrients", "INFO");
   });
 
-  bindAction("smallBuy", () => {
+  bind("smallBuy", () => {
     buyers += 1;
-    volume += rand(150, 650);
-    mcap += rand(900, 2600);
-    log(`Buy • +1 buyers • +${fmtMoney(volume)} vol`, "INFO");
+    const dv = rand(180, 900);
+    const dm = rand(900, 3200);
+    volume += dv;
+    mcap += dm;
+    log(`Buy • +1 buyers • +${fmt(dv)} vol • +${fmt(dm)} MC`, "INFO");
+    if (Math.random() < 0.3) shockwave(colonies[0], 0.55);
   });
 
-  bindAction("whaleBuy", () => {
-    buyers += Math.floor(rand(2, 5));
-    volume += rand(1800, 5200);
-    mcap += rand(8000, 18000);
-    log("Whale buy spike", "EVENT");
+  bind("whaleBuy", () => {
+    const b = randi(2, 5);
+    const dv = rand(2500, 8500);
+    const dm = rand(9000, 22000);
+    buyers += b;
+    volume += dv;
+    mcap += dm;
+    shockwave(colonies[0], 1.2);
+    log(`Whale Buy • +${b} buyers • +${fmt(dv)} vol • +${fmt(dm)} MC`, "EVENT");
   });
 
-  bindAction("sell", () => {
-    const dv = rand(400, 1200);
-    const dm = rand(1800, 5200);
+  bind("sell", () => {
+    const dv = rand(600, 2600);
+    const dm = rand(2200, 9000);
     volume = Math.max(0, volume - dv);
     mcap = Math.max(0, mcap - dm);
-    log("Sell-off pressure", "WARN");
+    log(`Sell-off • -${fmt(dv)} vol • -${fmt(dm)} MC`, "WARN");
   });
 
-  bindAction("storm", () => {
-    volume += rand(3000, 12000);
-    mcap += rand(1500, 6000);
-    log("Volume storm surge", "EVENT");
+  bind("storm", () => {
+    const dv = rand(5000, 18000);
+    const dm = rand(2000, 8000);
+    volume += dv;
+    mcap += dm;
+    shockwave(colonies[0], 1.0);
+    log(`Volume Storm • +${fmt(dv)} vol • +${fmt(dm)} MC`, "EVENT");
   });
 
-  bindAction("mutate", () => {
-    const c = colonies[Math.floor(rand(0, colonies.length))];
-    const w = c.worms[Math.floor(rand(0, c.worms.length))];
-    if (!w) return;
+  bind("mutate", () => {
+    mutateRandom();
+  });
 
-    const r = Math.random();
-    if (r < 0.5) {
-      // color shift
-      w.hue = (w.hue + rand(25, 90)) % 360;
-      log(`Color shift • Worm ${w.id} (Colony ${c.id})`, "MUTATION");
-    } else if (r < 0.85) {
-      // grow limbs (visual appendages)
-      const limbCount = Math.floor(rand(1, 3));
-      for (let i = 0; i < limbCount; i++) {
-        w.limbs.push({
-          at: Math.floor(rand(2, w.segs.length - 2)),
-          len: rand(18, 60),
-          ang: rand(-1.2, 1.2),
-          wob: rand(0.6, 1.4),
-        });
-      }
-      log(`Limb growth • Worm ${w.id}`, "MUTATION");
-    } else {
-      // aggression spike (speed)
-      w.speed *= rand(1.05, 1.25);
-      log(`Aggression spike • Worm ${w.id}`, "MUTATION");
+  bind("focus", () => {
+    focusOn = !focusOn;
+    const btn = document.querySelector(`button[data-action="focus"]`);
+    if (btn) btn.textContent = `Focus: ${focusOn ? "On" : "Off"}`;
+    if (focusOn) centerOnSelected(false);
+  });
+
+  bind("zoomIn", () => (zoom = clamp(zoom * 1.12, 0.6, 2.6)));
+  bind("zoomOut", () => (zoom = clamp(zoom * 0.88, 0.6, 2.6)));
+
+  bind("capture", () => {
+    try {
+      const url = canvas.toDataURL("image/png");
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "worm_colony.png";
+      a.click();
+      log("Capture saved", "INFO");
+    } catch {
+      log("Capture blocked by iOS — try share screenshot", "WARN");
     }
   });
 
-  bindAction("reset", () => {
-    location.reload();
-  });
+  bind("reset", () => location.reload());
 
-  // ---------- Rendering helpers ----------
-  function drawGlowCircle(x, y, r, color, alpha) {
+  // ---------- Stats update ----------
+  function updateStats() {
+    if (elBuyers) elBuyers.textContent = String(buyers);
+    if (elVolume) elVolume.textContent = fmt(volume);
+    if (elMcap) elMcap.textContent = fmt(mcap);
+    if (elColonies) elColonies.textContent = String(colonies.length);
+    if (elWorms) {
+      const total = colonies.reduce((a, c) => a + c.worms.length, 0);
+      elWorms.textContent = String(total);
+    }
+  }
+
+  // ---------- Rendering ----------
+  function aura(x, y, r, hue, a) {
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, `hsla(${color}, 95%, 65%, ${alpha})`);
-    g.addColorStop(1, `hsla(${color}, 95%, 65%, 0)`);
+    g.addColorStop(0, `hsla(${hue},95%,65%,${a})`);
+    g.addColorStop(1, `hsla(${hue},95%,65%,0)`);
     ctx.fillStyle = g;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  function strokeNoodle(points, hue, width, alpha) {
-    ctx.strokeStyle = `hsla(${hue}, 92%, 62%, ${alpha})`;
-    ctx.lineWidth = width;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+  function irregularBlob(col, time) {
+    // metaball-ish field using nodes
+    // (we draw it as layered auras + a faint outline, so it reads as “weird shape”)
+    const baseHue = col.dna.hue;
+    for (let i = 0; i < col.nodes.length; i++) {
+      const n = col.nodes[i];
+      const x = col.x + n.ox + Math.sin(time * 0.001 * n.sp + n.ph) * 10;
+      const y = col.y + n.oy + Math.cos(time * 0.001 * n.sp + n.ph) * 10;
+      aura(x, y, n.r * 1.05, (baseHue + i * 18) % 360, 0.16);
+      aura(x, y, n.r * 0.7, (baseHue + i * 22 + 40) % 360, 0.10);
+    }
 
+    // outline: approximate blob boundary as a “wobble ring”
+    const R = 130;
+    ctx.strokeStyle = `hsla(${baseHue}, 90%, 65%, .30)`;
+    ctx.lineWidth = 1.6;
     ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    for (let a = 0; a <= Math.PI * 2 + 0.001; a += Math.PI / 20) {
+      const wob =
+        Math.sin(a * 3 + time * 0.0015) * 10 +
+        Math.sin(a * 7 - time * 0.0011) * 6;
+      const rr = R + wob * col.dna.chaos;
+      const px = col.x + Math.cos(a) * rr;
+      const py = col.y + Math.sin(a) * rr;
+      if (a === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
     ctx.stroke();
   }
 
-  // ---------- Camera / interaction (tap select, drag pan, pinch zoom) ----------
-  let camX = 0,
-    camY = 0,
-    zoom = 1;
+  function drawWorm(w, time) {
+    const pts = w.segs;
 
-  let dragging = false;
-  let lastX = 0,
-    lastY = 0;
+    // outer glow
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = `hsla(${w.hue}, 92%, 62%, ${w.isBoss ? 0.28 : 0.16})`;
+    ctx.lineWidth = w.width + (w.isBoss ? 8 : 6);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
 
-  let selected = 0;
+    // core
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = `hsla(${w.hue}, 95%, 65%, ${w.isBoss ? 0.98 : 0.9})`;
+    ctx.lineWidth = w.width;
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
 
-  function toWorld(px, py) {
-    return {
-      x: (px - W / 2) / zoom - camX,
-      y: (py - H / 2) / zoom - camY,
-    };
-  }
-
-  function dist2(ax, ay, bx, by) {
-    const dx = ax - bx,
-      dy = ay - by;
-    return dx * dx + dy * dy;
-  }
-
-  function pickColony(wx, wy) {
-    let best = -1;
-    let bestD = Infinity;
-    for (let i = 0; i < colonies.length; i++) {
-      const c = colonies[i];
-      const d = dist2(wx, wy, c.x, c.y);
-      if (d < bestD) {
-        bestD = d;
-        best = i;
-      }
+    // beads for detail
+    for (let i = 0; i < pts.length; i += 2) {
+      const p = pts[i];
+      const r = Math.max(2.2, w.width * 0.35);
+      ctx.fillStyle = `hsla(${(w.hue + 20) % 360}, 95%, 65%, .85)`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
     }
-    // only select if within a reasonable radius
-    if (best !== -1 && bestD < 220 * 220) return best;
-    return -1;
-  }
 
-  // pointer events (works on iOS)
-  canvas.addEventListener(
-    "pointerdown",
-    (e) => {
-      canvas.setPointerCapture?.(e.pointerId);
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
-    },
-    { passive: true }
-  );
+    // limbs
+    if (w.limbs?.length) {
+      ctx.globalCompositeOperation = "lighter";
+      for (const L of w.limbs) {
+        const base = pts[clamp(L.at, 0, pts.length - 1)];
+        const baseAng =
+          (pts[L.at]?.a || 0) +
+          L.ang +
+          Math.sin(time * 0.002 * L.wob + w.phase) * 0.35;
 
-  canvas.addEventListener(
-    "pointermove",
-    (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      camX += dx / zoom;
-      camY += dy / zoom;
-    },
-    { passive: true }
-  );
+        const lx = base.x + Math.cos(baseAng) * L.len;
+        const ly = base.y + Math.sin(baseAng) * L.len;
 
-  canvas.addEventListener(
-    "pointerup",
-    (e) => {
-      dragging = false;
-
-      // tap select (if tiny movement)
-      const wxwy = toWorld(e.clientX, e.clientY);
-      const idx = pickColony(wxwy.x, wxwy.y);
-      if (idx !== -1) {
-        selected = idx;
-        log(`Selected Colony #${idx + 1}`, "INFO");
+        ctx.strokeStyle = `hsla(${(w.hue + 40) % 360}, 95%, 66%, .55)`;
+        ctx.lineWidth = Math.max(2, w.width * 0.35);
+        ctx.beginPath();
+        ctx.moveTo(base.x, base.y);
+        ctx.quadraticCurveTo(
+          base.x + Math.cos(baseAng) * (L.len * 0.55),
+          base.y + Math.sin(baseAng) * (L.len * 0.55),
+          lx,
+          ly
+        );
+        ctx.stroke();
       }
-    },
-    { passive: true }
-  );
-
-  // pinch zoom (simple: wheel + gesture fallback)
-  canvas.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      const k = e.deltaY > 0 ? 0.92 : 1.08;
-      zoom = Math.max(0.6, Math.min(2.4, zoom * k));
-    },
-    { passive: false }
-  );
-
-  // ---------- Update UI stats ----------
-  function updateStats() {
-    if (elBuyers) elBuyers.textContent = String(buyers);
-    if (elVolume) elVolume.textContent = fmtMoney(volume);
-    if (elMcap) elMcap.textContent = fmtMoney(mcap);
-    if (elColonies) elColonies.textContent = String(colonies.length);
-    if (elWorms) {
-      const w = colonies.reduce((a, c) => a + c.worms.length, 0);
-      elWorms.textContent = String(w);
+      ctx.globalCompositeOperation = "source-over";
     }
   }
 
-  // ---------- Main simulation step ----------
-  function step() {
-    // logic triggers
+  // ---------- Simulation step ----------
+  function wormBehavior(col, w, time) {
+    const head = w.segs[0];
+    const jitter = Math.sin(time * 0.002 + w.phase) * 0.12;
+    head.a += (Math.random() - 0.5) * w.turn + jitter;
+
+    // different movement styles
+    const dx = col.x - head.x;
+    const dy = col.y - head.y;
+    const toward = Math.atan2(dy, dx);
+
+    if (w.type === "DRIFTER") {
+      head.a = head.a * 0.93 + toward * 0.07;
+    } else if (w.type === "ORBITER") {
+      // orbit: rotate the toward angle
+      const orbit = toward + (Math.sin(time * 0.001 + w.phase) > 0 ? 1 : -1) * 0.9;
+      head.a = head.a * 0.90 + orbit * 0.10;
+    } else {
+      // hunter: more aggressive turns + occasional flips
+      const bite = toward + Math.sin(time * 0.003 + w.phase) * 0.35;
+      head.a = head.a * 0.86 + bite * 0.14;
+    }
+
+    // advance head
+    const boost = w.isBoss ? 2.0 : 1.0;
+    head.x += Math.cos(head.a) * w.speed * 2.2 * boost;
+    head.y += Math.sin(head.a) * w.speed * 2.2 * boost;
+
+    // loose boundary using blob-ish radius
+    const d = Math.hypot(head.x - col.x, head.y - col.y);
+    if (d > 260) {
+      head.a += Math.PI * 0.7 * (Math.random() > 0.5 ? 1 : -1);
+      head.x = col.x + (head.x - col.x) * 0.92;
+      head.y = col.y + (head.y - col.y) * 0.92;
+    }
+
+    // noodle physics
+    for (let i = 1; i < w.segs.length; i++) {
+      const prev = w.segs[i - 1];
+      const seg = w.segs[i];
+
+      const vx = seg.x - prev.x;
+      const vy = seg.y - prev.y;
+      const ang = Math.atan2(vy, vx);
+
+      const targetX = prev.x + Math.cos(ang) * seg.len;
+      const targetY = prev.y + Math.sin(ang) * seg.len;
+
+      seg.x = seg.x * 0.2 + targetX * 0.8;
+      seg.y = seg.y * 0.2 + targetY * 0.8;
+      seg.a = ang;
+    }
+  }
+
+  function step(dt, time) {
     ensureBoss();
     trySplitByMcap();
 
-    // drift colonies
+    // colony drift
     for (const c of colonies) {
       c.vx += rand(-0.02, 0.02) * c.dna.drift;
       c.vy += rand(-0.02, 0.02) * c.dna.drift;
-      c.vx *= 0.98;
-      c.vy *= 0.98;
+      c.vx *= 0.985;
+      c.vy *= 0.985;
       c.x += c.vx;
       c.y += c.vy;
 
       // shockwaves
-      for (const s of c.shockwaves) {
+      for (const s of c.shock) {
         s.r += s.v;
         s.a *= 0.96;
       }
-      c.shockwaves = c.shockwaves.filter((s) => s.a > 0.06);
+      c.shock = c.shock.filter((s) => s.a > 0.06);
     }
 
-    // move worms irregularly (no perfect circles)
+    // worms move
     for (const c of colonies) {
-      for (const w of c.worms) {
-        if (!w.alive) continue;
-
-        // head segment = segs[0]
-        const head = w.segs[0];
-        const jitter = Math.sin(perfTime * 0.002 + w.phase) * 0.12;
-        head.a += (Math.random() - 0.5) * w.turn + jitter;
-
-        // bias toward colony center + some orbit chaos
-        const dx = c.x - head.x;
-        const dy = c.y - head.y;
-        const toward = Math.atan2(dy, dx);
-        head.a = head.a * 0.92 + toward * 0.08;
-
-        // advance head
-        head.x += Math.cos(head.a) * w.speed * 2.2;
-        head.y += Math.sin(head.a) * w.speed * 2.2;
-
-        // keep within a loose radius (bounce)
-        const dist = Math.hypot(head.x - c.x, head.y - c.y);
-        if (dist > 240) {
-          head.a += Math.PI * 0.7 * (Math.random() > 0.5 ? 1 : -1);
-          head.x = c.x + (head.x - c.x) * 0.92;
-          head.y = c.y + (head.y - c.y) * 0.92;
-        }
-
-        // pull body segments toward previous segment (noodle physics)
-        for (let i = 1; i < w.segs.length; i++) {
-          const prev = w.segs[i - 1];
-          const seg = w.segs[i];
-
-          const vx = seg.x - prev.x;
-          const vy = seg.y - prev.y;
-          const ang = Math.atan2(vy, vx);
-
-          const targetX = prev.x + Math.cos(ang) * seg.len;
-          const targetY = prev.y + Math.sin(ang) * seg.len;
-
-          seg.x = seg.x * 0.2 + targetX * 0.8;
-          seg.y = seg.y * 0.2 + targetY * 0.8;
-          seg.a = ang;
-        }
-      }
+      for (const w of c.worms) wormBehavior(c, w, time);
     }
+
+    // focus camera
+    if (focusOn) centerOnSelected(true);
+
+    // auto mutations based on activity
+    mutTimer += dt;
+    const g = growthScore();
+    const mutRate = clamp(2.2 - g * 0.08, 0.4, 2.2); // faster as growth rises
+    if (mutTimer >= mutRate) {
+      mutTimer = 0;
+      if (Math.random() < 0.65) mutateRandom();
+    }
+
+    // worm population scales up with activity
+    maybeSpawnWorms(dt);
 
     updateStats();
   }
 
-  // ---------- Render ----------
-  let perfTime = 0;
-
-  function render() {
-    perfTime = performance.now();
-
-    // background
+  function render(time) {
     ctx.clearRect(0, 0, W, H);
     ctx.save();
 
-    // camera transform
+    // camera
     ctx.translate(W / 2, H / 2);
     ctx.scale(zoom, zoom);
     ctx.translate(camX, camY);
 
-    // colony auras + shockwaves
-    colonies.forEach((c, idx) => {
-      const hue = c.dna.hue;
-      const auraR = 110 * c.dna.aura + 18 * Math.sin(perfTime * 0.001 + idx);
+    // draw colonies as irregular blobs + auras + selection ring
+    for (let i = 0; i < colonies.length; i++) {
+      const c = colonies[i];
+      irregularBlob(c, time);
 
-      drawGlowCircle(c.x, c.y, auraR, hue, 0.28);
-      drawGlowCircle(c.x, c.y, auraR * 0.65, (hue + 40) % 360, 0.18);
+      // central aura
+      aura(c.x, c.y, 130 * c.dna.aura, c.dna.hue, 0.22);
+      aura(c.x, c.y, 90 * c.dna.aura, (c.dna.hue + 40) % 360, 0.12);
 
-      // selected ring
-      if (idx === selected) {
-        ctx.strokeStyle = `hsla(${hue}, 95%, 65%, .55)`;
+      // selection ring
+      if (i === selected) {
+        ctx.strokeStyle = `hsla(${c.dna.hue}, 95%, 65%, .55)`;
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(c.x, c.y, auraR * 0.72, 0, Math.PI * 2);
+        ctx.arc(c.x, c.y, 95 * c.dna.aura, 0, Math.PI * 2);
         ctx.stroke();
       }
 
       // shockwaves
-      for (const s of c.shockwaves) {
-        ctx.strokeStyle = `hsla(${hue}, 92%, 62%, ${s.a})`;
-        ctx.lineWidth = 2;
+      for (const s of c.shock) {
+        ctx.strokeStyle = `hsla(${c.dna.hue}, 92%, 62%, ${s.a})`;
+        ctx.lineWidth = s.w;
         ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+        ctx.arc(c.x, c.y, s.r, 0, Math.PI * 2);
         ctx.stroke();
       }
-    });
+    }
 
     // worms
-    colonies.forEach((c) => {
-      for (const w of c.worms) {
-        const pts = w.segs;
-        // soft outer glow
-        ctx.globalCompositeOperation = "lighter";
-        strokeNoodle(pts, w.hue, w.width + 6, w.isBoss ? 0.26 : 0.18);
-
-        // core
-        ctx.globalCompositeOperation = "source-over";
-        strokeNoodle(pts, w.hue, w.width, w.isBoss ? 0.95 : 0.9);
-
-        // segment beads (more detail than a line)
-        for (let i = 0; i < pts.length; i += 2) {
-          const p = pts[i];
-          ctx.fillStyle = `hsla(${w.hue}, 95%, 65%, .85)`;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, Math.max(2.2, w.width * 0.35), 0, Math.PI * 2);
-          ctx.fill();
-        }
-
-        // limbs
-        if (w.limbs && w.limbs.length) {
-          for (const L of w.limbs) {
-            const base = pts[Math.max(0, Math.min(pts.length - 1, L.at))];
-            const ang =
-              pts[L.at]?.a +
-              L.ang +
-              Math.sin(perfTime * 0.002 * L.wob + w.phase) * 0.35;
-
-            const lx = base.x + Math.cos(ang) * L.len;
-            const ly = base.y + Math.sin(ang) * L.len;
-
-            ctx.strokeStyle = `hsla(${w.hue + 30}, 95%, 66%, .75)`;
-            ctx.lineWidth = Math.max(2, w.width * 0.35);
-            ctx.beginPath();
-            ctx.moveTo(base.x, base.y);
-            ctx.quadraticCurveTo(
-              base.x + Math.cos(ang) * (L.len * 0.55),
-              base.y + Math.sin(ang) * (L.len * 0.55),
-              lx,
-              ly
-            );
-            ctx.stroke();
-          }
-        }
-      }
-    });
+    for (const c of colonies) {
+      for (const w of c.worms) drawWorm(w, time);
+    }
 
     ctx.restore();
 
-    // if nothing is visible, show hint
-    if (colonies.length && colonies[0].worms.length) {
-      dbg.textContent = "JS LOADED ✓ (rendering)";
-    }
+    dbg.textContent = "JS LOADED ✓ (rendering)";
   }
 
   // ---------- Main loop ----------
-  function tick() {
-    step();
-    render();
+  let last = performance.now();
+  function tick(now) {
+    const dt = (now - last) / 1000;
+    last = now;
+
+    // safety: avoid huge dt on tab background
+    step(Math.min(dt, 0.05), now);
+    render(now);
+
     requestAnimationFrame(tick);
   }
 
-  // Ensure initial sizing & start loop after load/layout
-  window.addEventListener("load", () => {
+  // ---------- Boot ----------
+  function boot() {
     resizeCanvas();
     updateStats();
     log("Simulation ready", "INFO");
-    tick();
-  });
-
-  // If load already fired
-  if (document.readyState === "complete") {
-    resizeCanvas();
-    updateStats();
-    log("Simulation ready", "INFO");
-    tick();
+    requestAnimationFrame(tick);
   }
+
+  window.addEventListener("load", boot);
+  if (document.readyState === "complete") boot();
 })();
