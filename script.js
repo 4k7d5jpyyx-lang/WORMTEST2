@@ -69,11 +69,14 @@
     while (logEl.children.length > LOG_CAP) logEl.removeChild(logEl.lastChild);
   }
 
-  // ---------- Canvas sizing (iOS safe) ----------
+  // ---------- Canvas sizing (iOS safe + performance) ----------
   let W = 1, H = 1, DPR = 1;
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
-    DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+
+    // PERF FIX #1: cap DPR so retina iPhones don't create huge canvases
+    DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1)); // was up to 3 before
+
     W = Math.max(1, rect.width);
     H = Math.max(1, rect.height);
     canvas.width = Math.floor(W * DPR);
@@ -94,17 +97,18 @@
   let nextSplitAt = MC_STEP;
   let bossSpawned = false;
 
-  // Growth score drives worm count, limb growth, aggression, etc.
   function growthScore() {
-    // weighted so MC matters most, then volume, then buyers
     return (mcap / 20000) + (volume / 6000) + (buyers / 10);
   }
 
   // ---------- Camera + interaction ----------
-  let camX = 0, camY = 0, zoom = 1;
+  let camX = 0, camY = 0, zoom = 0.78; // START ZOOMED OUT (still gets fit-to-arena below)
   let dragging = false, lastX = 0, lastY = 0;
   let selected = 0;
   let focusOn = false;
+
+  // PERF FIX #3: render "lite" while interacting (dragging/pinching)
+  let isInteracting = false;
 
   function toWorld(px, py) {
     return {
@@ -120,14 +124,13 @@
       const d = dist2(wx, wy, c.x, c.y);
       if (d < bestD) { bestD = d; best = i; }
     }
-    // select only if reasonably close
     return (best !== -1 && bestD < 260 * 260) ? best : -1;
   }
 
-  // pointer events
   canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture?.(e.pointerId);
     dragging = true;
+    isInteracting = true;
     lastX = e.clientX; lastY = e.clientY;
   }, { passive: true });
 
@@ -142,6 +145,8 @@
 
   canvas.addEventListener("pointerup", (e) => {
     dragging = false;
+    isInteracting = false;
+
     const w = toWorld(e.clientX, e.clientY);
     const idx = pickColony(w.x, w.y);
     if (idx !== -1) {
@@ -151,16 +156,24 @@
     }
   }, { passive: true });
 
-  // pinch zoom
+  canvas.addEventListener("pointercancel", () => {
+    dragging = false;
+    isInteracting = false;
+  }, { passive: true });
+
+  // wheel zoom (desktop)
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
+    isInteracting = true;
     const k = e.deltaY > 0 ? 0.92 : 1.08;
     zoom = clamp(zoom * k, 0.6, 2.6);
+    clearTimeout(canvas.__wheelTO);
+    canvas.__wheelTO = setTimeout(() => (isInteracting = false), 120);
   }, { passive: false });
 
   // double tap center
   let lastTap = 0;
-  canvas.addEventListener("touchend", (e) => {
+  canvas.addEventListener("touchend", () => {
     const now = Date.now();
     if (now - lastTap < 280) centerOnSelected(false);
     lastTap = now;
@@ -191,7 +204,6 @@
       style: ["COMET", "CROWN", "ARC", "SPIRAL", "DRIFT"][randi(0, 4)]
     };
 
-    // irregular blob field: several metaball “nodes”
     const nodes = Array.from({ length: randi(4, 7) }, () => ({
       ox: rand(-70, 70),
       oy: rand(-70, 70),
@@ -216,7 +228,9 @@
     const type = ["DRIFTER", "ORBITER", "HUNTER"][randi(0, 2)];
     const segCount = big ? randi(18, 28) : randi(10, 18);
     const baseLen = big ? rand(10, 16) : rand(7, 12);
-    const hue = (col.dna.hue + rand(-70, 70) + 360) % 360;
+
+    // more diverse colors per worm (not just +/- 70)
+    const hue = (col.dna.hue + rand(-140, 140) + 360) % 360;
 
     const w = {
       id: Math.random().toString(16).slice(2, 6),
@@ -250,9 +264,46 @@
   colonies[0].worms.push(newWorm(colonies[0], false));
   colonies[0].worms.push(newWorm(colonies[0], true));
 
+  // ---------- Fit view (zoomed out start) ----------
+  function zoomOutToFitAll() {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+    // Pad for blob + worms + auras
+    const pad = 420;
+
+    for (const c of colonies) {
+      minX = Math.min(minX, c.x - pad);
+      minY = Math.min(minY, c.y - pad);
+      maxX = Math.max(maxX, c.x + pad);
+      maxY = Math.max(maxY, c.y + pad);
+    }
+
+    const bw = Math.max(240, maxX - minX);
+    const bh = Math.max(240, maxY - minY);
+
+    const fit = Math.min(W / bw, H / bh);
+    zoom = clamp(fit * 0.92, 0.6, 1.6);
+
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    camX = -cx;
+    camY = -cy;
+  }
+
   // ---------- Events / mechanics ----------
   function shockwave(col, strength = 1) {
     col.shock.push({ r: 0, v: 2.6 + strength * 1.2, a: 0.85, w: 2 + strength });
+  }
+
+  function addLimb(w, col, big = false) {
+    if (!w.segs.length) return;
+    const at = randi(2, w.segs.length - 3);
+    w.limbs.push({
+      at,
+      len: big ? rand(35, 90) : rand(22, 70),
+      ang: rand(-1.3, 1.3),
+      wob: rand(0.7, 1.6)
+    });
   }
 
   function ensureBoss() {
@@ -264,7 +315,6 @@
       boss.width *= 1.6;
       boss.speed *= 0.7;
       boss.hue = 120;
-      // give boss some limbs
       for (let i = 0; i < 4; i++) addLimb(boss, c, true);
       c.worms.push(boss);
       bossSpawned = true;
@@ -281,10 +331,9 @@
       const nc = newColony(
         base.x + Math.cos(ang) * dist,
         base.y + Math.sin(ang) * dist,
-        (base.dna.hue + rand(-70, 70) + 360) % 360
+        (base.dna.hue + rand(-90, 90) + 360) % 360
       );
 
-      // starter worms scale a bit with growth
       const g = growthScore();
       const starters = clamp(Math.floor(2 + g / 2), 2, 6);
       for (let i = 0; i < starters; i++) nc.worms.push(newWorm(nc, Math.random() < 0.25));
@@ -297,44 +346,31 @@
     }
   }
 
-  function addLimb(w, col, big = false) {
-    if (!w.segs.length) return;
-    const at = randi(2, w.segs.length - 3);
-    w.limbs.push({
-      at,
-      len: big ? rand(35, 90) : rand(22, 70),
-      ang: rand(-1.3, 1.3),
-      wob: rand(0.7, 1.6)
-    });
-  }
-
   function mutateRandom() {
     const c = colonies[randi(0, colonies.length - 1)];
     if (!c?.worms?.length) return;
     const w = c.worms[randi(0, c.worms.length - 1)];
     const r = Math.random();
 
-    if (r < 0.36) {
-      w.hue = (w.hue + rand(30, 110)) % 360;
+    if (r < 0.30) {
+      w.hue = (w.hue + rand(30, 140)) % 360;
       log(`Color shift • Worm ${w.id} (Colony #${colonies.indexOf(c) + 1})`, "MUTATION");
-    } else if (r < 0.62) {
+    } else if (r < 0.56) {
       w.speed *= rand(1.05, 1.25);
       log(`Aggression spike • Worm ${w.id}`, "MUTATION");
-    } else if (r < 0.82) {
+    } else if (r < 0.78) {
       w.width = clamp(w.width * rand(1.05, 1.25), 3.5, 16);
       log(`Body growth • Worm ${w.id}`, "MUTATION");
     } else {
-      addLimb(w, c, Math.random() < 0.25);
+      addLimb(w, c, Math.random() < 0.35);
       log(`Limb growth • Worm ${w.id}`, "MUTATION");
     }
 
     if (Math.random() < 0.22) shockwave(c, 0.9);
   }
 
-  // Auto mutations based on activity
+  // ---------- Worm population scaling ----------
   let mutTimer = 0;
-
-  // Worm population grows with activity
   let spawnTimer = 0;
 
   function maybeSpawnWorms(dt) {
@@ -345,7 +381,7 @@
     if (total >= target) return;
 
     spawnTimer += dt;
-    const rate = clamp(1.2 - g * 0.04, 0.15, 1.2); // faster with growth
+    const rate = clamp(1.2 - g * 0.04, 0.15, 1.2);
     if (spawnTimer >= rate) {
       spawnTimer = 0;
       const c = colonies[selected] || colonies[0];
@@ -405,9 +441,7 @@
     log(`Volume Storm • +${fmt(dv)} vol • +${fmt(dm)} MC`, "EVENT");
   });
 
-  bind("mutate", () => {
-    mutateRandom();
-  });
+  bind("mutate", () => mutateRandom());
 
   bind("focus", () => {
     focusOn = !focusOn;
@@ -428,7 +462,7 @@
       a.click();
       log("Capture saved", "INFO");
     } catch {
-      log("Capture blocked by iOS — try share screenshot", "WARN");
+      log("Capture blocked by iOS — try screenshot/share", "WARN");
     }
   });
 
@@ -446,7 +480,7 @@
     }
   }
 
-  // ---------- Rendering ----------
+  // ---------- Rendering helpers ----------
   function aura(x, y, r, hue, a) {
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
     g.addColorStop(0, `hsla(${hue},95%,65%,${a})`);
@@ -458,18 +492,22 @@
   }
 
   function irregularBlob(col, time) {
-    // metaball-ish field using nodes
-    // (we draw it as layered auras + a faint outline, so it reads as “weird shape”)
     const baseHue = col.dna.hue;
-    for (let i = 0; i < col.nodes.length; i++) {
-      const n = col.nodes[i];
-      const x = col.x + n.ox + Math.sin(time * 0.001 * n.sp + n.ph) * 10;
-      const y = col.y + n.oy + Math.cos(time * 0.001 * n.sp + n.ph) * 10;
-      aura(x, y, n.r * 1.05, (baseHue + i * 18) % 360, 0.16);
-      aura(x, y, n.r * 0.7, (baseHue + i * 22 + 40) % 360, 0.10);
+
+    // PERF FIX #4: while interacting, reduce heavy metaball aura stacking
+    if (!isInteracting) {
+      for (let i = 0; i < col.nodes.length; i++) {
+        const n = col.nodes[i];
+        const x = col.x + n.ox + Math.sin(time * 0.001 * n.sp + n.ph) * 10;
+        const y = col.y + n.oy + Math.cos(time * 0.001 * n.sp + n.ph) * 10;
+        aura(x, y, n.r * 1.05, (baseHue + i * 18) % 360, 0.16);
+        aura(x, y, n.r * 0.7, (baseHue + i * 22 + 40) % 360, 0.10);
+      }
+    } else {
+      aura(col.x, col.y, 140 * col.dna.aura, baseHue, 0.12);
     }
 
-    // outline: approximate blob boundary as a “wobble ring”
+    // outline wobble ring (cheap enough)
     const R = 130;
     ctx.strokeStyle = `hsla(${baseHue}, 90%, 65%, .30)`;
     ctx.lineWidth = 1.6;
@@ -490,10 +528,23 @@
   function drawWorm(w, time) {
     const pts = w.segs;
 
-    // outer glow
-    ctx.globalCompositeOperation = "lighter";
-    ctx.strokeStyle = `hsla(${w.hue}, 92%, 62%, ${w.isBoss ? 0.28 : 0.16})`;
-    ctx.lineWidth = w.width + (w.isBoss ? 8 : 6);
+    // PERF FIX #5: skip outer glow while interacting (biggest draw win)
+    if (!isInteracting) {
+      ctx.globalCompositeOperation = "lighter";
+      ctx.strokeStyle = `hsla(${w.hue}, 92%, 62%, ${w.isBoss ? 0.26 : 0.14})`;
+      ctx.lineWidth = w.width + (w.isBoss ? 8 : 6);
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+
+    // core
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = `hsla(${w.hue}, 95%, 65%, ${w.isBoss ? 0.98 : 0.9})`;
+    ctx.lineWidth = w.width;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.beginPath();
@@ -501,39 +552,33 @@
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     ctx.stroke();
 
-    // core
-    ctx.globalCompositeOperation = "source-over";
-    ctx.strokeStyle = `hsla(${w.hue}, 95%, 65%, ${w.isBoss ? 0.98 : 0.9})`;
-    ctx.lineWidth = w.width;
-    ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
-    ctx.stroke();
-
-    // beads for detail
-    for (let i = 0; i < pts.length; i += 2) {
-      const p = pts[i];
-      const r = Math.max(2.2, w.width * 0.35);
-      ctx.fillStyle = `hsla(${(w.hue + 20) % 360}, 95%, 65%, .85)`;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-      ctx.fill();
+    // bead detail (PERF FIX: fewer beads + disabled while interacting)
+    if (!isInteracting) {
+      for (let i = 0; i < pts.length; i += 4) {
+        const p = pts[i];
+        const r = Math.max(2.2, w.width * 0.35);
+        ctx.fillStyle = `hsla(${(w.hue + 20) % 360}, 95%, 65%, .82)`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
-    // limbs
+    // limbs (keep but soften cost while interacting)
     if (w.limbs?.length) {
-      ctx.globalCompositeOperation = "lighter";
+      ctx.globalCompositeOperation = isInteracting ? "source-over" : "lighter";
       for (const L of w.limbs) {
-        const base = pts[clamp(L.at, 0, pts.length - 1)];
+        const at = clamp(L.at, 0, pts.length - 1);
+        const base = pts[at];
         const baseAng =
-          (pts[L.at]?.a || 0) +
+          (pts[at]?.a || 0) +
           L.ang +
           Math.sin(time * 0.002 * L.wob + w.phase) * 0.35;
 
         const lx = base.x + Math.cos(baseAng) * L.len;
         const ly = base.y + Math.sin(baseAng) * L.len;
 
-        ctx.strokeStyle = `hsla(${(w.hue + 40) % 360}, 95%, 66%, .55)`;
+        ctx.strokeStyle = `hsla(${(w.hue + 40) % 360}, 95%, 66%, ${isInteracting ? 0.35 : 0.55})`;
         ctx.lineWidth = Math.max(2, w.width * 0.35);
         ctx.beginPath();
         ctx.moveTo(base.x, base.y);
@@ -555,7 +600,6 @@
     const jitter = Math.sin(time * 0.002 + w.phase) * 0.12;
     head.a += (Math.random() - 0.5) * w.turn + jitter;
 
-    // different movement styles
     const dx = col.x - head.x;
     const dy = col.y - head.y;
     const toward = Math.atan2(dy, dx);
@@ -563,21 +607,17 @@
     if (w.type === "DRIFTER") {
       head.a = head.a * 0.93 + toward * 0.07;
     } else if (w.type === "ORBITER") {
-      // orbit: rotate the toward angle
       const orbit = toward + (Math.sin(time * 0.001 + w.phase) > 0 ? 1 : -1) * 0.9;
       head.a = head.a * 0.90 + orbit * 0.10;
     } else {
-      // hunter: more aggressive turns + occasional flips
       const bite = toward + Math.sin(time * 0.003 + w.phase) * 0.35;
       head.a = head.a * 0.86 + bite * 0.14;
     }
 
-    // advance head
     const boost = w.isBoss ? 2.0 : 1.0;
     head.x += Math.cos(head.a) * w.speed * 2.2 * boost;
     head.y += Math.sin(head.a) * w.speed * 2.2 * boost;
 
-    // loose boundary using blob-ish radius
     const d = Math.hypot(head.x - col.x, head.y - col.y);
     if (d > 260) {
       head.a += Math.PI * 0.7 * (Math.random() > 0.5 ? 1 : -1);
@@ -585,7 +625,6 @@
       head.y = col.y + (head.y - col.y) * 0.92;
     }
 
-    // noodle physics
     for (let i = 1; i < w.segs.length; i++) {
       const prev = w.segs[i - 1];
       const seg = w.segs[i];
@@ -616,7 +655,6 @@
       c.x += c.vx;
       c.y += c.vy;
 
-      // shockwaves
       for (const s of c.shock) {
         s.r += s.v;
         s.a *= 0.96;
@@ -624,26 +662,22 @@
       c.shock = c.shock.filter((s) => s.a > 0.06);
     }
 
-    // worms move
     for (const c of colonies) {
       for (const w of c.worms) wormBehavior(c, w, time);
     }
 
-    // focus camera
     if (focusOn) centerOnSelected(true);
 
     // auto mutations based on activity
     mutTimer += dt;
     const g = growthScore();
-    const mutRate = clamp(2.2 - g * 0.08, 0.4, 2.2); // faster as growth rises
+    const mutRate = clamp(2.2 - g * 0.08, 0.4, 2.2);
     if (mutTimer >= mutRate) {
       mutTimer = 0;
       if (Math.random() < 0.65) mutateRandom();
     }
 
-    // worm population scales up with activity
     maybeSpawnWorms(dt);
-
     updateStats();
   }
 
@@ -656,16 +690,17 @@
     ctx.scale(zoom, zoom);
     ctx.translate(camX, camY);
 
-    // draw colonies as irregular blobs + auras + selection ring
     for (let i = 0; i < colonies.length; i++) {
       const c = colonies[i];
+
       irregularBlob(c, time);
 
-      // central aura
-      aura(c.x, c.y, 130 * c.dna.aura, c.dna.hue, 0.22);
-      aura(c.x, c.y, 90 * c.dna.aura, (c.dna.hue + 40) % 360, 0.12);
+      // auras (reduced while interacting handled in irregularBlob)
+      if (!isInteracting) {
+        aura(c.x, c.y, 130 * c.dna.aura, c.dna.hue, 0.18);
+        aura(c.x, c.y, 90 * c.dna.aura, (c.dna.hue + 40) % 360, 0.10);
+      }
 
-      // selection ring
       if (i === selected) {
         ctx.strokeStyle = `hsla(${c.dna.hue}, 95%, 65%, .55)`;
         ctx.lineWidth = 2;
@@ -674,7 +709,6 @@
         ctx.stroke();
       }
 
-      // shockwaves
       for (const s of c.shock) {
         ctx.strokeStyle = `hsla(${c.dna.hue}, 92%, 62%, ${s.a})`;
         ctx.lineWidth = s.w;
@@ -684,25 +718,33 @@
       }
     }
 
-    // worms
     for (const c of colonies) {
       for (const w of c.worms) drawWorm(w, time);
     }
 
     ctx.restore();
-
     dbg.textContent = "JS LOADED ✓ (rendering)";
   }
 
-  // ---------- Main loop ----------
+  // ---------- Main loop (performance throttles) ----------
   let last = performance.now();
+
+  // PERF FIX #2: render at a capped FPS (step stays smooth)
+  let renderAccum = 0;
+  const RENDER_FPS = 40;        // try 30 if your phone is older
+  const RENDER_DT = 1 / RENDER_FPS;
+
   function tick(now) {
-    const dt = (now - last) / 1000;
+    const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
 
-    // safety: avoid huge dt on tab background
-    step(Math.min(dt, 0.05), now);
-    render(now);
+    step(dt, now);
+
+    renderAccum += dt;
+    if (renderAccum >= RENDER_DT) {
+      renderAccum = 0;
+      render(now);
+    }
 
     requestAnimationFrame(tick);
   }
@@ -710,6 +752,7 @@
   // ---------- Boot ----------
   function boot() {
     resizeCanvas();
+    zoomOutToFitAll(); // START VIEW: zoomed out + centered
     updateStats();
     log("Simulation ready", "INFO");
     requestAnimationFrame(tick);
