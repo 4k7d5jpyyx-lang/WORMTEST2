@@ -6,7 +6,7 @@
   <title>Worm Colony — $WORM</title>
 
   <link rel="preconnect" href="https://i.postimg.cc" crossorigin>
-  <link rel="stylesheet" href="styles.css?v=42" />
+  <link rel="stylesheet" href="styles.css" />
 </head>
 
 <body>
@@ -34,23 +34,40 @@
         <div class="simWrap">
           <canvas id="simCanvas"></canvas>
 
-          <!-- Simplified Inspector (overlay) -->
-          <div class="inspector" id="inspector" aria-label="Selected colony inspector">
-            <div class="insHdr">
-              <div class="insTitle">
-                <span class="insDot"></span>
-                <span id="insName">Selected: Colony #1</span>
+          <!-- Overlay: Colony Inspector -->
+          <div class="inspector" id="inspector" aria-label="Colony inspector">
+            <div class="inspectorTop">
+              <div class="inspectorTitle">
+                <span class="pill">Inspect</span>
+                <span id="selName">Colony #1</span>
               </div>
-              <button class="insBtn" id="insToggle" title="Collapse / Expand" type="button">▾</button>
+              <button class="iconBtn" id="toggleInspector" type="button" title="Hide/Show">▾</button>
             </div>
 
-            <div class="insBody" id="insBody">
-              <div class="insRow"><span class="k">DNA</span><span class="v" id="insDna">—</span></div>
-              <div class="insRow"><span class="k">Biome</span><span class="v" id="insBiome">—</span></div>
-              <div class="insRow"><span class="k">Temp</span><span class="v" id="insTemp">—</span></div>
-              <div class="insRow"><span class="k">Style</span><span class="v" id="insStyle">—</span></div>
-              <div class="insRow"><span class="k">Bosses</span><span class="v" id="insBoss">—</span></div>
-              <div class="insRow"><span class="k">Worms</span><span class="v" id="insWorms">—</span></div>
+            <div class="inspectorBody" id="inspectorBody">
+              <div class="grid2">
+                <div class="kv">
+                  <div class="k">DNA</div>
+                  <div class="v" id="dnaVal">—</div>
+                </div>
+                <div class="kv">
+                  <div class="k">Temperament</div>
+                  <div class="v" id="tempVal">—</div>
+                </div>
+                <div class="kv">
+                  <div class="k">Biome</div>
+                  <div class="v" id="biomeVal">—</div>
+                </div>
+                <div class="kv">
+                  <div class="k">Style</div>
+                  <div class="v" id="styleVal">—</div>
+                </div>
+              </div>
+
+              <div class="mutBox">
+                <div class="mutHdr">Recent Mutations</div>
+                <div class="mutList" id="mutList"></div>
+              </div>
             </div>
           </div>
 
@@ -66,11 +83,26 @@
       <!-- STATS + EVENTS -->
       <section class="card statsCard">
         <div class="statsGrid">
-          <div class="stat"><div class="label">Buyers</div><div class="value" id="buyers">0</div></div>
-          <div class="stat"><div class="label">Volume</div><div class="value" id="volume">$0</div></div>
-          <div class="stat"><div class="label">M Cap</div><div class="value" id="mcap">$0</div></div>
-          <div class="stat"><div class="label">Colonies</div><div class="value" id="colonies">1</div></div>
-          <div class="stat"><div class="label">Worms</div><div class="value" id="worms">0</div></div>
+          <div class="stat">
+            <div class="label">Buyers</div>
+            <div class="value" id="buyers">0</div>
+          </div>
+          <div class="stat">
+            <div class="label">Volume</div>
+            <div class="value" id="volume">$0</div>
+          </div>
+          <div class="stat">
+            <div class="label">M Cap</div>
+            <div class="value" id="mcap">$0</div>
+          </div>
+          <div class="stat">
+            <div class="label">Colonies</div>
+            <div class="value" id="colonies">1</div>
+          </div>
+          <div class="stat">
+            <div class="label">Worms</div>
+            <div class="value" id="worms">0</div>
+          </div>
         </div>
 
         <div class="eventsHdr">
@@ -112,6 +144,6 @@
     </footer>
   </div>
 
-  <script src="script.js?v=42" defer></script>
+  <script src="script.js" defer></script>
 </body>
 </html>
