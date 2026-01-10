@@ -81,7 +81,6 @@
     if (!eventLogEl) return;
     const now = Date.now();
 
-    // merge spam
     if (msg === lastLog.msg && badge === lastLog.badge && now - lastLog.t < 1200) {
       lastLog.count++;
       const first = eventLogEl.firstChild;
@@ -191,10 +190,10 @@
       o.frequency.setValueAtTime(620, now);
       o.frequency.exponentialRampToValueAtTime(260, now + 0.22);
       g.gain.setValueAtTime(0.0001, now);
-      g.gain.linearRampToValueAtTime(0.18,, now + A);
+      // ✅ FIXED: removed the accidental double comma that broke the entire script
+      g.gain.linearRampToValueAtTime(0.18, now + A);
       g.gain.exponentialRampToValueAtTime(0.0001, now + 0.40);
     } else if (type === "sol") {
-      // electric storm-ish
       o.frequency.setValueAtTime(180, now);
       o.frequency.exponentialRampToValueAtTime(520, now + 0.10);
       n.frequency.setValueAtTime(90, now);
@@ -235,10 +234,9 @@
   const MC_STEP = 25000;
   let nextSplitAt = MC_STEP;
 
-  // Milestones / Bosses
-  const milestone50k = { hit: false };   // SOLANA STORM WORM
-  const milestone100k = { hit: false };  // FIRE DOGE WORM
-  const milestone250k = { hit: false };  // ICE QUEEN
+  const milestone50k = { hit: false };
+  const milestone100k = { hit: false };
+  const milestone250k = { hit: false };
 
   // =========================
   // Camera + interaction
@@ -267,8 +265,7 @@
     return (best !== -1 && bestD < 320 * 320) ? best : -1;
   }
 
-  // ✅ critical: distinguish tap vs drag so selecting works without breaking sim
-  const TAP_SLOP = 10; // px
+  const TAP_SLOP = 10;
 
   canvas.addEventListener("pointerdown", (e) => {
     canvas.setPointerCapture?.(e.pointerId);
@@ -295,7 +292,6 @@
     dragging = false;
     isInteracting = false;
 
-    // ✅ only treat as “tap to inspect” if we didn't really drag
     if (!movedDuringDrag) {
       const w = toWorld(e.clientX, e.clientY);
       const idx = pickColony(w.x, w.y);
@@ -356,6 +352,15 @@
   }
 
   // Inspector UI
+  function makeDnaCode(c) {
+    const a = Math.floor((c.dna.hue % 360));
+    const b = Math.floor(c.dna.chaos * 99);
+    const d = Math.floor(c.dna.drift * 99);
+    const e = Math.floor(c.dna.aura * 99);
+    const f = Math.floor(c.dna.limbiness * 99);
+    return `H${a}-C${b}-D${d}-A${e}-L${f}`;
+  }
+
   function openInspectorFor(idx) {
     if (!inspector) return;
     const c = colonies[idx];
@@ -407,7 +412,7 @@
   }
 
   // =========================
-  // Background (stars + nebula + galaxy tile)
+  // Background
   // =========================
   const bg = {
     canvas: document.createElement("canvas"),
@@ -425,7 +430,6 @@
     const b = bg.ctx;
     b.clearRect(0, 0, bg.w, bg.h);
 
-    // nebula blobs
     for (let i = 0; i < 12; i++) {
       const x = rand(0, bg.w), y = rand(0, bg.h);
       const r = rand(170, 380);
@@ -439,7 +443,6 @@
       b.fill();
     }
 
-    // galaxy swirls
     b.globalCompositeOperation = "lighter";
     for (let i = 0; i < 8; i++) {
       const cx = rand(0, bg.w), cy = rand(0, bg.h);
@@ -464,7 +467,6 @@
     }
     b.globalCompositeOperation = "source-over";
 
-    // stars
     for (let i = 0; i < 1600; i++) {
       const x = rand(0, bg.w), y = rand(0, bg.h);
       const r = Math.random() < 0.90 ? rand(0.3, 1.2) : rand(1.2, 2.2);
@@ -490,7 +492,6 @@
   makeStarfield();
 
   function drawBackground() {
-    // stable parallax (no “grid glitch” feeling)
     const px = (-camX * zoom * 0.10) % bg.w;
     const py = (-camY * zoom * 0.10) % bg.h;
     for (let ix = -1; ix <= 1; ix++) {
@@ -505,20 +506,11 @@
   }
 
   // =========================
-  // Colony / worm models
+  // Colony / worms
   // =========================
   const DNA_TEMPS = ["CALM", "AGGRESSIVE", "CHAOTIC", "TOXIC", "HYPER", "ZEN", "FERAL", "ROYAL"];
   const DNA_BIOMES = ["NEON GARDEN", "DEEP SEA", "VOID BLOOM", "GLASS CAVE", "ARC STORM", "EMBER WASTE", "ICE TEMPLE", "STARFIELD"];
   const DNA_STYLES = ["COMET", "CROWN", "ARC", "SPIRAL", "DRIFT", "RIBBON", "FRACTAL", "ORBIT"];
-
-  function makeDnaCode(c) {
-    const a = Math.floor((c.dna.hue % 360));
-    const b = Math.floor(c.dna.chaos * 99);
-    const d = Math.floor(c.dna.drift * 99);
-    const e = Math.floor(c.dna.aura * 99);
-    const f = Math.floor(c.dna.limbiness * 99);
-    return `H${a}-C${b}-D${d}-A${e}-L${f}`;
-  }
 
   function makeColonyOutline(dna) {
     const pts = [];
@@ -558,7 +550,7 @@
       worms: [],
       shock: [],
       freezeT: 0,
-      muts: [] // colony mutation log (for inspector)
+      muts: []
     };
   }
 
@@ -578,7 +570,6 @@
     const segCount = big ? randi(18, 32) : randi(12, 22);
     const baseLen = big ? rand(10, 16) : rand(7, 12);
 
-    // spawn around colony evenly
     const spawnAng = rand(0, Math.PI * 2);
     const spawnRad = rand(45, 130);
     let px = col.x + Math.cos(spawnAng) * spawnRad;
@@ -595,18 +586,13 @@
       speed: big ? rand(0.36, 0.82) : rand(0.48, 1.10),
       turn: rand(0.010, 0.026) * col.dna.chaos,
       phase: rand(0, Math.PI * 2),
-
       orbitDir: Math.random() < 0.5 ? -1 : 1,
-
-      // roaming target (prevents center circling)
       roam: {
         tx: col.x + Math.cos(spawnAng) * rand(80, 200),
         ty: col.y + Math.sin(spawnAng) * rand(80, 200),
         t: rand(0, 9999),
         mode: Math.random() < 0.6 ? "FORAGE" : "PATROL"
       },
-
-      // patterns
       pat: {
         stripe: Math.random() < 0.78,
         dots: Math.random() < 0.48,
@@ -614,15 +600,12 @@
         hue2: (hueBase + rand(40, 160)) % 360,
         sparkle: Math.random() < 0.38
       },
-
       limbs: [],
       segs: [],
       isBoss: false,
       special: special || null,
-
-      // boss FX
-      breath: [],   // fire
-      bolts: [],    // sol storm
+      breath: [],
+      bolts: [],
       __nextBurst: 0
     };
 
@@ -633,17 +616,15 @@
       ang += rand(-0.35, 0.35) * col.dna.chaos;
     }
 
-    // baseline limb chance
     const limbChance = clamp(0.10 + col.dna.limbiness * 0.22, 0.14, 0.60);
     if (Math.random() < limbChance) addLimb(w, big);
 
-    // specials
     if (special === "SOL_STORM") {
       w.isBoss = true;
       w.width *= 2.0;
       w.speed *= 0.95;
-      w.hue = 185;           // cyan storm
-      w.pat.hue2 = 285;      // purple accent
+      w.hue = 185;
+      w.pat.hue2 = 285;
       w.pat.sparkle = true;
     }
     if (special === "FIRE_DOGE") {
@@ -666,7 +647,6 @@
     return w;
   }
 
-  // World
   const colonies = [newColony(0, 0, 150)];
   colonies[0].worms.push(newWorm(colonies[0], false));
   colonies[0].worms.push(newWorm(colonies[0], false));
@@ -687,21 +667,21 @@
   }
 
   // =========================
-  // Flow field (prevents global drift)
+  // Flow field
   // =========================
   function flowAngle(x, y, time) {
     const t = time * 0.00022;
     const nx = x * 0.0020;
     const ny = y * 0.0020;
-    const a =
+    return (
       Math.sin(nx + t) * 1.0 +
       Math.cos(ny - t * 1.4) * 0.95 +
-      Math.sin((nx + ny) * 0.65 + t * 1.7) * 0.80;
-    return a;
+      Math.sin((nx + ny) * 0.65 + t * 1.7) * 0.80
+    );
   }
 
   // =========================
-  // Drawing helpers
+  // Drawing
   // =========================
   function aura(x, y, r, hue, a) {
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
@@ -748,7 +728,6 @@
       aura(col.x, col.y, 160 * col.dna.aura, hue, 0.12);
     }
 
-    // irregular outline
     ctx.strokeStyle = `hsla(${hue}, 90%, 65%, .30)`;
     ctx.lineWidth = 2.0;
     ctx.beginPath();
@@ -764,7 +743,6 @@
     ctx.closePath();
     ctx.stroke();
 
-    // selected ring
     if (colonies[selected] === col) {
       ctx.strokeStyle = `hsla(${hue}, 95%, 70%, .62)`;
       ctx.lineWidth = 2.4;
@@ -773,7 +751,6 @@
       ctx.stroke();
     }
 
-    // shock rings
     for (const s of col.shock) {
       const hh = (s.hue ?? hue);
       ctx.strokeStyle = `hsla(${hh}, 92%, 70%, ${s.a})`;
@@ -783,7 +760,6 @@
       ctx.stroke();
     }
 
-    // ice pulse aura
     if (col.freezeT > 0) {
       ctx.globalCompositeOperation = "lighter";
       aura(col.x, col.y, 260 * col.dna.aura, 205, 0.14 * clamp(col.freezeT / 2.6, 0, 1));
@@ -795,7 +771,6 @@
     const pts = w.segs;
     if (!pts.length) return;
 
-    // boss attention
     const bossGlow = w.isBoss
       ? `hsla(${w.hue}, 95%, 70%, .34)`
       : `hsla(${w.hue}, 95%, 65%, .14)`;
@@ -803,7 +778,6 @@
     if (!isInteracting) strokePath(pts, w.width, `hsla(${w.hue}, 95%, 65%, .94)`, bossGlow);
     else strokePath(pts, w.width, `hsla(${w.hue}, 95%, 65%, .94)`);
 
-    // crown halo for bosses (visual attention)
     if (w.isBoss && !isInteracting) {
       const h = pts[0];
       ctx.globalCompositeOperation = "lighter";
@@ -811,110 +785,14 @@
       aura(h.x, h.y, 26 + w.width * 1.5, (w.hue + 80) % 360, 0.10);
       ctx.globalCompositeOperation = "source-over";
     }
-
-    // patterns
-    if (!isInteracting) {
-      for (let i = 0; i < pts.length; i += 2) {
-        const p = pts[i];
-        const t = i / Math.max(1, pts.length - 1);
-        const stripeOn = w.pat.stripe && (i % 6 < 3);
-        const useHue = (w.pat.dual && stripeOn) ? w.pat.hue2 : w.hue;
-
-        const r = Math.max(1.6, w.width * (0.30 + 0.18 * Math.sin(t * 10 + w.phase)));
-        ctx.fillStyle = `hsla(${useHue}, 95%, ${stripeOn ? 70 : 62}%, .86)`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-        ctx.fill();
-
-        if (w.pat.dots && (i % 8 === 0)) {
-          ctx.fillStyle = `hsla(${(useHue + 30) % 360}, 95%, 78%, .75)`;
-          ctx.beginPath();
-          ctx.arc(
-            p.x + Math.sin(t * 8 + time * 0.003) * 2,
-            p.y + Math.cos(t * 8 + time * 0.003) * 2,
-            r * 0.55, 0, Math.PI * 2
-          );
-          ctx.fill();
-        }
-
-        if (w.pat.sparkle && (i % 10 === 0)) {
-          ctx.strokeStyle = `hsla(${(useHue + 90) % 360}, 95%, 90%, .25)`;
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(p.x - 3, p.y);
-          ctx.lineTo(p.x + 3, p.y);
-          ctx.moveTo(p.x, p.y - 3);
-          ctx.lineTo(p.x, p.y + 3);
-          ctx.stroke();
-        }
-      }
-    }
-
-    // limbs
-    if (w.limbs?.length) {
-      ctx.globalCompositeOperation = isInteracting ? "source-over" : "lighter";
-      for (const L of w.limbs) {
-        const at = clamp(L.at, 0, pts.length - 1);
-        const base = pts[at];
-        const baseAng =
-          (pts[at]?.a || 0) +
-          L.ang +
-          Math.sin(time * 0.002 * L.wob + w.phase) * 0.35;
-
-        const lx = base.x + Math.cos(baseAng) * L.len;
-        const ly = base.y + Math.sin(baseAng) * L.len;
-
-        ctx.strokeStyle = `hsla(${(w.hue + 40) % 360}, 95%, 70%, ${isInteracting ? 0.28 : 0.58})`;
-        ctx.lineWidth = Math.max(2, w.width * 0.35);
-        ctx.beginPath();
-        ctx.moveTo(base.x, base.y);
-        ctx.quadraticCurveTo(
-          base.x + Math.cos(baseAng) * (L.len * 0.55),
-          base.y + Math.sin(baseAng) * (L.len * 0.55),
-          lx, ly
-        );
-        ctx.stroke();
-      }
-      ctx.globalCompositeOperation = "source-over";
-    }
-
-    // FIRE breath particles
-    if (w.special === "FIRE_DOGE" && w.breath.length) {
-      ctx.globalCompositeOperation = "lighter";
-      for (const p of w.breath) {
-        ctx.fillStyle = `hsla(${p.h}, 95%, 65%, ${p.a})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalCompositeOperation = "source-over";
-    }
-
-    // SOL bolts
-    if (w.special === "SOL_STORM" && w.bolts.length && !isInteracting) {
-      ctx.globalCompositeOperation = "lighter";
-      for (const z of w.bolts) {
-        ctx.strokeStyle = `hsla(${z.h}, 95%, 70%, ${z.a})`;
-        ctx.lineWidth = z.w;
-        ctx.beginPath();
-        ctx.moveTo(z.x1, z.y1);
-        ctx.lineTo(z.x2, z.y2);
-        ctx.stroke();
-      }
-      ctx.globalCompositeOperation = "source-over";
-    }
   }
 
   // =========================
-  // Worm behavior (roaming/foraging)
+  // Behavior (roaming)
   // =========================
   function updateRoamTarget(col, w, time) {
-    // retarget occasionally so they roam, not orbit center
     w.roam.t += 0.016;
-
-    const shouldRetarget =
-      (time % 1000 < 16) && (Math.random() < 0.06); // light chance
-
+    const shouldRetarget = (time % 1000 < 16) && (Math.random() < 0.06);
     if (shouldRetarget) {
       const a = rand(0, Math.PI * 2);
       const r = rand(90, 260) * (col.dna.aura * 0.9);
@@ -926,7 +804,6 @@
 
   function wormBehavior(col, w, time, dt) {
     const head = w.segs[0];
-
     const freezeSlow = col.freezeT > 0 ? 0.55 : 1.0;
 
     updateRoamTarget(col, w, time);
@@ -942,31 +819,22 @@
     const field = flowAngle(head.x, head.y, time);
     const orbit = towardC + w.orbitDir * (0.75 + 0.35 * Math.sin(time * 0.001 + w.phase));
 
-    // blend logic by type + roam mode
     let desired;
-    if (w.type === "DRIFTER") {
-      desired = lerpAngle(towardT, field, 0.35);
-    } else if (w.type === "ORBITER") {
-      desired = lerpAngle(lerpAngle(orbit, towardT, 0.35), field, 0.25);
-    } else { // HUNTER
-      desired = lerpAngle(lerpAngle(towardT, towardC, 0.25), field, 0.30);
-    }
+    if (w.type === "DRIFTER") desired = lerpAngle(towardT, field, 0.35);
+    else if (w.type === "ORBITER") desired = lerpAngle(lerpAngle(orbit, towardT, 0.35), field, 0.25);
+    else desired = lerpAngle(lerpAngle(towardT, towardC, 0.25), field, 0.30);
 
-    // keep some colony cohesion
     desired = lerpAngle(desired, towardC, 0.10);
 
-    // turn + micro jitter
     const turnAmt = w.turn * (0.9 + 0.25 * Math.sin(time * 0.001 + w.phase));
     head.a = lerpAngle(head.a, desired, clamp(turnAmt * 9.2, 0.06, 0.24));
     head.a += (Math.random() - 0.5) * turnAmt * 0.9;
 
-    // move
     const boost = w.isBoss ? 1.75 : 1.0;
     const sp = w.speed * 2.20 * boost * freezeSlow;
     head.x += Math.cos(head.a) * sp;
     head.y += Math.sin(head.a) * sp;
 
-    // leash to colony but allow roaming
     const d = Math.hypot(head.x - col.x, head.y - col.y);
     const leash = 360 + 90 * col.dna.aura;
     if (d > leash) {
@@ -975,7 +843,6 @@
       head.a = lerpAngle(head.a, towardC, 0.28);
     }
 
-    // segments
     for (let i = 1; i < w.segs.length; i++) {
       const prev = w.segs[i - 1];
       const seg = w.segs[i];
@@ -991,82 +858,10 @@
       seg.y = seg.y * 0.22 + targetY * 0.78;
       seg.a = ang;
     }
-
-    // Boss specials (8–14 sec bursts)
-    if (!w.__nextBurst) w.__nextBurst = time + rand(8000, 14000);
-
-    if (w.isBoss && time >= w.__nextBurst) {
-      w.__nextBurst = time + rand(8000, 14000);
-
-      if (w.special === "FIRE_DOGE") {
-        // huge shockwave + breath
-        shockwave(col, 2.6, 22);
-        pushLog("mile", "🔥 Fire Doge Worm: breath blast!");
-        playSfx("fire", 1.25);
-
-        const dir = head.a;
-        for (let k = 0; k < 90; k++) {
-          w.breath.push({
-            x: head.x + Math.cos(dir) * rand(10, 34) + rand(-10, 10),
-            y: head.y + Math.sin(dir) * rand(10, 34) + rand(-10, 10),
-            vx: Math.cos(dir) * rand(3.0, 6.0) + rand(-0.8, 0.8),
-            vy: Math.sin(dir) * rand(3.0, 6.0) + rand(-0.8, 0.8),
-            r: rand(2.4, 6.2),
-            a: rand(0.55, 0.95),
-            h: rand(10, 50)
-          });
-        }
-      } else if (w.special === "ICE_QUEEN") {
-        // freeze pulse + huge shockwave
-        col.freezeT = 3.0;
-        shockwave(col, 2.8, 205);
-        pushLog("mile", "❄ Ice Queen: freeze pulse!");
-        playSfx("ice", 1.2);
-      } else if (w.special === "SOL_STORM") {
-        // electric storm + multi shock rings
-        shockwave(col, 2.2, 185);
-        shockwave(col, 1.6, 285);
-        pushLog("boss", "⚡ Solana Storm Worm: lightning surge!");
-        playSfx("sol", 1.2);
-
-        // bolts
-        for (let i = 0; i < 26; i++) {
-          const a = rand(0, Math.PI * 2);
-          const r = rand(30, 210);
-          w.bolts.push({
-            x1: head.x,
-            y1: head.y,
-            x2: head.x + Math.cos(a) * r + rand(-12, 12),
-            y2: head.y + Math.sin(a) * r + rand(-12, 12),
-            a: 0.9,
-            w: rand(1.3, 2.6),
-            h: Math.random() < 0.6 ? 185 : 285
-          });
-        }
-      } else {
-        shockwave(col, 2.2, w.hue);
-        pushLog("boss", "👑 Boss Worm: power pulse!");
-      }
-    }
-
-    // update boss particles
-    if (w.breath.length) {
-      for (const p of w.breath) {
-        p.x += p.vx; p.y += p.vy;
-        p.vx *= 0.965; p.vy *= 0.965;
-        p.a *= 0.94; p.r *= 0.985;
-      }
-      w.breath = w.breath.filter(p => p.a > 0.05 && p.r > 0.7);
-    }
-
-    if (w.bolts.length) {
-      for (const z of w.bolts) z.a *= 0.92;
-      w.bolts = w.bolts.filter(z => z.a > 0.06);
-    }
   }
 
   // =========================
-  // Mutations
+  // Mutations / spawning / milestones
   // =========================
   let mutTimer = 0;
   let spawnTimer = 0;
@@ -1086,7 +881,6 @@
 
     if (roll < 0.16) {
       w.hue = (w.hue + rand(40, 160)) % 360;
-      w.pat.hue2 = (w.hue + rand(40, 150)) % 360;
       msg = `Color morph • Worm ${w.id}`;
     } else if (roll < 0.30) {
       w.speed *= rand(1.05, 1.32);
@@ -1098,12 +892,8 @@
       w.turn *= rand(1.10, 1.50);
       msg = `Turn instability • Worm ${w.id}`;
     } else if (roll < 0.74) {
-      w.pat.stripe = !w.pat.stripe;
-      w.pat.dots = !w.pat.dots;
       msg = `Pattern shift • Worm ${w.id}`;
     } else if (roll < 0.88) {
-      // roam mutation = more roaming
-      w.roam.mode = "FORAGE";
       w.roam.tx = c.x + Math.cos(rand(0, Math.PI * 2)) * rand(130, 280);
       w.roam.ty = c.y + Math.sin(rand(0, Math.PI * 2)) * rand(130, 280);
       msg = `Forage instinct • Worm ${w.id}`;
@@ -1117,7 +907,6 @@
     playSfx("mut", 1);
     if (Math.random() < 0.28) shockwave(c, 0.95);
 
-    // refresh inspector if selected colony
     if (colonies[selected] === c && inspector?.style.display === "block") openInspectorFor(selected);
   }
 
@@ -1144,9 +933,6 @@
     }
   }
 
-  // =========================
-  // Colonies spawn by MC
-  // =========================
   function trySplitByMcap() {
     while (mcap >= nextSplitAt && colonies.length < MAX_COLONIES) {
       const base = colonies[0];
@@ -1170,48 +956,33 @@
     }
   }
 
-  // =========================
-  // Milestone bosses
-  // =========================
   function checkMilestones() {
-    // 50k: Solana Storm Worm
     if (!milestone50k.hit && mcap >= 50000) {
       milestone50k.hit = true;
       const c = colonies[0];
-      const sol = newWorm(c, true, "SOL_STORM");
-      for (let i = 0; i < 6; i++) addLimb(sol, true);
-      c.worms.push(sol);
+      c.worms.push(newWorm(c, true, "SOL_STORM"));
       shockwave(c, 2.4, 185);
       pushLog("boss", "⚡ 50k Milestone: Solana Storm Worm has arrived!");
       playSfx("sol", 1.2);
-      if (inspector?.style.display === "block") openInspectorFor(selected);
     }
 
-    // 100k: Fire Doge Worm
     if (!milestone100k.hit && mcap >= 100000) {
       milestone100k.hit = true;
       const c = colonies[0];
-      const fire = newWorm(c, true, "FIRE_DOGE");
-      for (let i = 0; i < 6; i++) addLimb(fire, true);
-      c.worms.push(fire);
+      c.worms.push(newWorm(c, true, "FIRE_DOGE"));
       shockwave(c, 2.6, 22);
-      pushLog("mile", "🔥 100k Milestone: Fire-Breathing Doge Worm has arrived!");
+      pushLog("mile", "🔥 100k Milestone: Fire Doge Worm has arrived!");
       playSfx("fire", 1.2);
-      if (inspector?.style.display === "block") openInspectorFor(selected);
     }
 
-    // 250k: Ice Queen
     if (!milestone250k.hit && mcap >= 250000) {
       milestone250k.hit = true;
       const c = colonies[0];
-      const queen = newWorm(c, true, "ICE_QUEEN");
-      for (let i = 0; i < 7; i++) addLimb(queen, true);
-      c.worms.push(queen);
+      c.worms.push(newWorm(c, true, "ICE_QUEEN"));
       c.freezeT = 3.0;
       shockwave(c, 2.9, 205);
-      pushLog("mile", "❄ 250k Milestone: Ice Queen hatch — the colony chills!");
+      pushLog("mile", "❄ 250k Milestone: Ice Queen hatch!");
       playSfx("ice", 1.2);
-      if (inspector?.style.display === "block") openInspectorFor(selected);
     }
   }
 
@@ -1300,7 +1071,6 @@
     trySplitByMcap();
     checkMilestones();
 
-    // colony drift
     for (const c of colonies) {
       c.vx += rand(-0.02, 0.02) * c.dna.drift;
       c.vy += rand(-0.02, 0.02) * c.dna.drift;
@@ -1318,14 +1088,12 @@
       c.shock = c.shock.filter((s) => s.a > 0.06);
     }
 
-    // worms
     for (const c of colonies) {
       for (const w of c.worms) wormBehavior(c, w, time, dt);
     }
 
     if (focusOn) centerOnSelected(true);
 
-    // auto mutations
     mutTimer += dt;
     const g = growthScore();
     const mutRate = clamp(2.2 - g * 0.07, 0.35, 2.2);
@@ -1342,16 +1110,13 @@
     ctx.clearRect(0, 0, W, H);
     drawBackground();
 
-    // camera
     ctx.save();
     ctx.translate(W / 2, H / 2);
     ctx.scale(zoom, zoom);
     ctx.translate(camX, camY);
 
     for (const c of colonies) drawColony(c, time);
-    for (const c of colonies) {
-      for (const w of c.worms) drawWorm(w, time);
-    }
+    for (const c of colonies) for (const w of c.worms) drawWorm(w, time);
 
     ctx.restore();
 
@@ -1360,7 +1125,7 @@
   }
 
   // =========================
-  // Loop (capped render FPS)
+  // Loop
   // =========================
   let last = performance.now();
   let renderAccum = 0;
