@@ -1920,3 +1920,136 @@
   window.addEventListener("load", boot);
   if (document.readyState === "complete") boot();
 })();
+/* ============================================================
+   SAFE EXTENSION PATCH — DO NOT REMOVE EXISTING CODE
+   This file augments the existing simulation ONLY
+============================================================ */
+
+/* ---------- Nutrient Bar Injection (no HTML edits) ---------- */
+(function injectNutrientBar(){
+  if (document.getElementById("nutrientFill")) return;
+
+  const wrap = document.createElement("div");
+  wrap.style.cssText = `
+    position: sticky;
+    top: 56px;
+    z-index: 30;
+    margin: 10px 12px;
+    height: 14px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.08);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
+    overflow: hidden;
+  `;
+
+  const fill = document.createElement("div");
+  fill.id = "nutrientFill";
+  fill.style.cssText = `
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(
+      90deg,
+      #22ff88,
+      #6cfaff,
+      #a78bfa
+    );
+    transition: width .25s ease;
+    box-shadow: 0 0 14px rgba(120,255,200,.6);
+  `;
+
+  wrap.appendChild(fill);
+  const app = document.querySelector(".app") || document.body;
+  app.insertBefore(wrap, app.children[1] || app.firstChild);
+})();
+
+/* ---------- Nutrient Tracking (non-destructive) ---------- */
+window.__nutrients ??= 0;
+window.__nutrientCap ??= 100;
+
+function addNutrients(v){
+  window.__nutrients = Math.min(
+    window.__nutrients + v,
+    window.__nutrientCap
+  );
+  const el = document.getElementById("nutrientFill");
+  if (el) {
+    el.style.width =
+      (window.__nutrients / window.__nutrientCap * 100).toFixed(1) + "%";
+  }
+}
+
+/* ---------- Soft Center Repulsion (anti-bundling) ---------- */
+window.__applyAntiClump ??= function(col){
+  for (const w of col.worms) {
+    const h = w.segs?.[0];
+    if (!h) continue;
+
+    const dx = h.x - col.x;
+    const dy = h.y - col.y;
+    const d = Math.hypot(dx, dy);
+
+    if (d < 140) {
+      const k = (140 - d) / 140;
+      h.x += (dx / (d + 0.01)) * k * 2.2;
+      h.y += (dy / (d + 0.01)) * k * 2.2;
+    }
+  }
+};
+
+/* ---------- Boss-to-Boss Separation (no grouping) ---------- */
+window.__bossRepel ??= function(col){
+  const bosses = col.worms.filter(w => w.isBoss);
+  for (let i = 0; i < bosses.length; i++) {
+    for (let j = i + 1; j < bosses.length; j++) {
+      const a = bosses[i].segs?.[0];
+      const b = bosses[j].segs?.[0];
+      if (!a || !b) continue;
+
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const d = Math.hypot(dx, dy);
+
+      if (d > 0 && d < 360) {
+        const k = (360 - d) / 360;
+        a.x += dx / d * k * 3.0;
+        a.y += dy / d * k * 3.0;
+        b.x -= dx / d * k * 3.0;
+        b.y -= dy / d * k * 3.0;
+      }
+    }
+  }
+};
+
+/* ---------- Boss Shockwave Dampening ---------- */
+if (window.worldShake) {
+  const _shake = window.worldShake;
+  window.worldShake = function(mag, ms){
+    _shake(mag * 0.6, ms * 0.8);
+  };
+}
+
+/* ---------- Colony Tick Hook (safe) ---------- */
+window.__postColonyTick ??= function(){
+  if (!window.colonies) return;
+
+  for (const c of colonies) {
+    __applyAntiClump(c);
+    __bossRepel(c);
+  }
+
+  // nutrients grow slowly with activity
+  addNutrients(0.15);
+};
+
+/* ---------- Attach Hook Once ---------- */
+if (!window.__hookedColonyTick) {
+  window.__hookedColonyTick = true;
+
+  const _step = window.step;
+  if (typeof _step === "function") {
+    window.step = function(dt, time){
+      _step(dt, time);
+      __postColonyTick();
+    };
+  }
+}
