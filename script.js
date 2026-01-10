@@ -2053,3 +2053,232 @@ if (!window.__hookedColonyTick) {
     };
   }
 }
+/* =========================================================
+   PATCH: Nutrients + World Food + Boss Spawn Cinematics
+   SAFE TO PASTE AT BOTTOM — NO OVERRIDES
+========================================================= */
+(() => {
+  if (window.__WORM_NUTRIENT_PATCH__) return;
+  window.__WORM_NUTRIENT_PATCH__ = true;
+
+  /* ---------- Nutrient UI ---------- */
+  function ensureNutrientUI() {
+    if (document.getElementById("nutrientWrap")) return;
+
+    const wrap = document.createElement("div");
+    wrap.id = "nutrientWrap";
+    wrap.style.cssText = `
+      position: sticky;
+      top: 56px;
+      z-index: 60;
+      margin: 6px 12px;
+      padding: 6px;
+      border-radius: 12px;
+      background: rgba(10,15,20,.55);
+      backdrop-filter: blur(10px);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
+    `;
+
+    const bar = document.createElement("div");
+    bar.style.cssText = `
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.10);
+      overflow: hidden;
+    `;
+
+    const fill = document.createElement("div");
+    fill.id = "nutrientFill";
+    fill.style.cssText = `
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg,#2aff88,#6cfaff,#a78bfa);
+      box-shadow: 0 0 12px rgba(140,255,200,.8);
+      transition: width .25s ease;
+    `;
+
+    bar.appendChild(fill);
+    wrap.appendChild(bar);
+
+    document.body.prepend(wrap);
+  }
+
+  ensureNutrientUI();
+
+  /* ---------- Nutrient State ---------- */
+  const Nutrients = {
+    value: 0,
+    cap: 120,
+    orbs: []
+  };
+
+  function updateNutrientUI() {
+    const f = document.getElementById("nutrientFill");
+    if (!f) return;
+    f.style.width = `${Math.min(100, (Nutrients.value / Nutrients.cap) * 100)}%`;
+  }
+
+  /* ---------- World Nutrients ---------- */
+  function spawnNutrient(col) {
+    const a = Math.random() * Math.PI * 2;
+    const d = 180 + Math.random() * 320;
+    Nutrients.orbs.push({
+      x: col.x + Math.cos(a) * d,
+      y: col.y + Math.sin(a) * d,
+      r: 5 + Math.random() * 6,
+      v: 6 + Math.random() * 10,
+      drift: Math.random() * 9999
+    });
+  }
+
+  /* ---------- Hook into existing colony growth ---------- */
+  const __oldTrySplit = window.trySplitByMcap;
+  if (__oldTrySplit) {
+    window.trySplitByMcap = function () {
+      for (const c of window.colonies || []) {
+        if (Math.random() < 0.35) spawnNutrient(c);
+      }
+      return __oldTrySplit.apply(this, arguments);
+    };
+  }
+
+  /* ---------- Worms Seek Nutrients ---------- */
+  function steerToNutrients(col, w) {
+    if (!Nutrients.orbs.length) return null;
+    const h = w.segs?.[0];
+    if (!h) return null;
+
+    let best = null;
+    let bestD = 260;
+
+    for (const n of Nutrients.orbs) {
+      const dx = n.x - h.x;
+      const dy = n.y - h.y;
+      const d = Math.hypot(dx, dy);
+      if (d < bestD) {
+        bestD = d;
+        best = n;
+      }
+    }
+
+    if (!best) return null;
+    return Math.atan2(best.y - h.y, best.x - h.x);
+  }
+
+  /* ---------- Patch worm behavior safely ---------- */
+  const __oldWormBehavior = window.wormBehavior;
+  if (__oldWormBehavior) {
+    window.wormBehavior = function (col, w, time, dt) {
+      const h = w.segs?.[0];
+      if (h) {
+        const ang = steerToNutrients(col, w);
+        if (ang !== null) {
+          h.a = h.a * 0.82 + ang * 0.18;
+        }
+      }
+      return __oldWormBehavior.apply(this, arguments);
+    };
+  }
+
+  /* ---------- Nutrient Consumption ---------- */
+  function consumeNutrients() {
+    for (const c of window.colonies || []) {
+      for (const w of c.worms || []) {
+        const h = w.segs?.[0];
+        if (!h) continue;
+
+        for (let i = Nutrients.orbs.length - 1; i >= 0; i--) {
+          const n = Nutrients.orbs[i];
+          if (Math.hypot(h.x - n.x, h.y - n.y) < n.r + 10) {
+            Nutrients.orbs.splice(i, 1);
+            Nutrients.value = Math.min(Nutrients.cap, Nutrients.value + n.v);
+
+            // ECONOMY FEEDBACK
+            window.buyers += 1;
+            window.volume += n.v * 120;
+            window.mcap += n.v * 260;
+          }
+        }
+      }
+    }
+  }
+
+  /* ---------- Draw Nutrients ---------- */
+  const __oldRender = window.render;
+  if (__oldRender) {
+    window.render = function (time) {
+      __oldRender.apply(this, arguments);
+
+      const ctx = window.ctx;
+      if (!ctx) return;
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const n of Nutrients.orbs) {
+        const p = 0.6 + 0.4 * Math.sin(time * 0.003 + n.drift);
+        const g = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r * 4);
+        g.addColorStop(0, `rgba(140,255,200,${0.9 * p})`);
+        g.addColorStop(1, "rgba(140,255,200,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.r * 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    };
+  }
+
+  /* ---------- Cinematic Boss Spawn Camera ---------- */
+  let camTween = null;
+
+  function bossCameraPull(x, y) {
+    camTween = {
+      t: 0,
+      dur: 2.5,
+      sx: window.camX,
+      sy: window.camY,
+      sz: window.zoom,
+      tx: -x,
+      ty: -y,
+      tz: Math.min(window.zoom * 1.25, 2.2)
+    };
+  }
+
+  const __oldCheckMilestones = window.checkMilestones;
+  if (__oldCheckMilestones) {
+    window.checkMilestones = function () {
+      const before = (window.colonies?.[0]?.worms || []).length;
+      __oldCheckMilestones.apply(this, arguments);
+      const after = (window.colonies?.[0]?.worms || []).length;
+
+      if (after > before) {
+        const boss = window.colonies[0].worms.at(-1);
+        if (boss?.isBoss && boss.segs?.[0]) {
+          bossCameraPull(boss.segs[0].x, boss.segs[0].y);
+        }
+      }
+    };
+  }
+
+  /* ---------- Camera Tween Update ---------- */
+  const __oldStep = window.step;
+  if (__oldStep) {
+    window.step = function (dt, time) {
+      if (camTween) {
+        camTween.t += dt;
+        const k = Math.min(1, camTween.t / camTween.dur);
+        const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+
+        window.camX = camTween.sx + (camTween.tx - camTween.sx) * e;
+        window.camY = camTween.sy + (camTween.ty - camTween.sy) * e;
+        window.zoom = camTween.sz + (camTween.tz - camTween.sz) * e;
+
+        if (k >= 1) camTween = null;
+      }
+
+      consumeNutrients();
+      updateNutrientUI();
+      return __oldStep.apply(this, arguments);
+    };
+  }
+})();
