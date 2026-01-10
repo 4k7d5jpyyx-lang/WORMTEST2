@@ -13,6 +13,7 @@
 
 *{ box-sizing:border-box; }
 html,body{ height:100%; }
+
 body{
   margin:0;
   font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
@@ -33,6 +34,7 @@ body{
   padding:12px 12px 40px;
 }
 
+/* ✅ FIX: remove extra GPU layers that can cause iOS flashing */
 .topbar{
   display:flex;
   align-items:center;
@@ -42,10 +44,8 @@ body{
   border:1px solid var(--stroke);
   background: linear-gradient(180deg, rgba(20,22,34,.62), rgba(10,12,18,.45));
   border-radius:18px;
-
-  /* iOS flicker fix */
-  transform: translateZ(0);
-  will-change: transform;
+  transform:none;
+  will-change:auto;
 }
 
 .brand{
@@ -80,15 +80,14 @@ body{
 
 .stack{ display:grid; gap:12px; margin-top:12px; }
 
+/* ✅ FIX: remove translateZ on all cards (major iOS flicker cause) */
 .card{
   border-radius:18px;
   border:1px solid var(--stroke);
   background: linear-gradient(180deg, var(--card), rgba(7,8,12,.45));
   overflow:hidden;
-
-  /* iOS scroll + canvas repaint stabilization */
-  transform: translateZ(0);
-  will-change: transform;
+  transform:none;
+  will-change:auto;
 }
 
 .simCard{ padding:12px; }
@@ -249,7 +248,9 @@ body{
 }
 
 /* =========================
-   Simplified Inspector
+   Simplified Inspector (FIXED)
+   - does NOT steal canvas taps
+   - collapse works with .inspector.isCollapsed
    ========================= */
 .inspector{
   position:absolute;
@@ -260,24 +261,32 @@ body{
   border:1px solid rgba(255,255,255,.10);
   background: rgba(0,0,0,.28);
   box-shadow: 0 0 28px rgba(0,255,210,.10);
-  backdrop-filter: none; /* iOS flicker fix */
+  backdrop-filter: none;
   -webkit-backdrop-filter: none;
   overflow:hidden;
-  pointer-events:auto;
+
+  /* KEY FIX: let canvas receive drag/tap */
+  pointer-events: none;
 }
+
 .insHdr{
   display:flex;
   align-items:center;
   justify-content:space-between;
   padding:10px 10px;
   border-bottom:1px solid rgba(255,255,255,.08);
+
+  /* allow only header to be interactive */
+  pointer-events: auto;
 }
+
 .insTitle{ display:flex; align-items:center; gap:10px; font-weight:800; }
 .insDot{
   width:9px;height:9px;border-radius:50%;
   background: rgba(160,80,255,.75);
   box-shadow: 0 0 14px rgba(160,80,255,.50);
 }
+
 .insBtn{
   border:1px solid rgba(255,255,255,.12);
   background: rgba(255,255,255,.06);
@@ -285,9 +294,11 @@ body{
   border-radius:10px;
   padding:6px 10px;
   font-weight:900;
+  pointer-events: auto;
 }
+
 .insBody{ padding:10px 10px; }
-.insBody.isCollapsed{ display:none; }
+.inspector.isCollapsed .insBody{ display:none; }
 
 .insRow{
   display:flex;
@@ -311,7 +322,7 @@ body{
   color: rgba(255,255,255,.92);
 }
 
-/* Small screens: keep it left, slightly smaller */
+/* Small screens */
 @media (max-width: 520px){
   .inspector{
     left:10px;
