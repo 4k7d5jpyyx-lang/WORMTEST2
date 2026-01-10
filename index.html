@@ -29,61 +29,50 @@
     </header>
 
     <main class="stack">
-      <!-- SIM -->
+      <!-- SIM CARD -->
       <section class="card simCard">
         <div class="simWrap">
           <canvas id="simCanvas"></canvas>
 
           <!-- Simplified Inspector (overlay) -->
-          <aside class="inspector" id="inspector" aria-label="Colony Inspector">
-            <div class="insTop">
+          <div class="inspector" id="inspector" aria-label="Selected colony inspector">
+            <div class="insHdr">
               <div class="insTitle">
-                <span class="pill">Selected</span>
-                <span id="insName">Colony #1</span>
+                <span class="insDot"></span>
+                <span id="insName">Selected: Colony #1</span>
               </div>
-              <button class="iconBtn" id="insClose" title="Close">✕</button>
+              <button class="insBtn" id="insToggle" title="Collapse / Expand">▾</button>
             </div>
 
-            <div class="insBody">
+            <div class="insBody" id="insBody">
               <div class="insRow">
-                <div class="chip" id="insBossChips"></div>
+                <span class="k">DNA</span>
+                <span class="v" id="insDna">—</span>
               </div>
-
-              <div class="insGrid">
-                <div class="kv">
-                  <div class="k">DNA</div>
-                  <div class="v mono" id="insDNA">—</div>
-                </div>
-                <div class="kv">
-                  <div class="k">Temperament</div>
-                  <div class="v" id="insTemp">—</div>
-                </div>
-                <div class="kv">
-                  <div class="k">Biome</div>
-                  <div class="v" id="insBiome">—</div>
-                </div>
-                <div class="kv">
-                  <div class="k">Style</div>
-                  <div class="v" id="insStyle">—</div>
-                </div>
-                <div class="kv">
-                  <div class="k">Worms</div>
-                  <div class="v" id="insWorms">—</div>
-                </div>
-                <div class="kv">
-                  <div class="k">Mutations</div>
-                  <div class="v" id="insMutCount">—</div>
-                </div>
+              <div class="insRow">
+                <span class="k">Biome</span>
+                <span class="v" id="insBiome">—</span>
               </div>
-
-              <div class="mutBox">
-                <div class="mutHdr">Recent Mutations</div>
-                <div class="mutList" id="insMuts"></div>
+              <div class="insRow">
+                <span class="k">Temp</span>
+                <span class="v" id="insTemp">—</span>
+              </div>
+              <div class="insRow">
+                <span class="k">Style</span>
+                <span class="v" id="insStyle">—</span>
+              </div>
+              <div class="insRow">
+                <span class="k">Bosses</span>
+                <span class="v" id="insBoss">—</span>
+              </div>
+              <div class="insRow">
+                <span class="k">Worms</span>
+                <span class="v" id="insWorms">—</span>
               </div>
             </div>
-          </aside>
+          </div>
 
-          <!-- Debug toast -->
+          <!-- Overlay: debug toast -->
           <div class="toast" id="toast">Loading…</div>
         </div>
 
@@ -156,6 +145,7 @@
     </footer>
   </div>
 
+  <!-- GitHub Pages tip: if caching ever lies, add ?v=2 -->
   <script src="script.js" defer></script>
 </body>
 </html>
