@@ -2253,3 +2253,39 @@ window.addEventListener("load", boot);
 if (document.readyState === "complete") {
   // do nothing — load event will handle it
 }
+/* =====================================================
+   PATCH: Nutrient → Colony Founding Bridge (SAFE)
+   Fixes: Nutrient bar fills but colonies never spawn
+   Does NOT remove or modify existing mechanics
+===================================================== */
+
+(function () {
+  // Guard against double-patching
+  if (window.__nutrientColonyPatchApplied) return;
+  window.__nutrientColonyPatchApplied = true;
+
+  // Ensure required symbols exist
+  if (
+    typeof NUTRIENT === "undefined" ||
+    typeof spendNutrientsTowardColony !== "function" ||
+    typeof wormsEatNutrients !== "function"
+  ) {
+    console.warn("[PATCH] Colony founding patch could not attach (symbols missing)");
+    return;
+  }
+
+  // Wrap wormsEatNutrients so founding is checked AFTER eating
+  const _wormsEatNutrients = wormsEatNutrients;
+
+  window.wormsEatNutrients = function patchedWormsEatNutrients() {
+    // original behavior
+    _wormsEatNutrients();
+
+    // NEW: attempt colony founding when nutrients are full
+    if (NUTRIENT.value >= NUTRIENT.cap) {
+      spendNutrientsTowardColony();
+    }
+  };
+
+  console.log("[PATCH] Nutrient → Colony founding bridge applied");
+})();
