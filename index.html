@@ -7,20 +7,17 @@
 
   <link rel="preconnect" href="https://i.postimg.cc" crossorigin>
 
-  <!-- cache-busted CSS -->
-  <link rel="stylesheet" href="./styles.css?v=20260110" />
+  <!-- IMPORTANT: keep CSS as a plain path (works for local + hosted) -->
+  <link rel="stylesheet" href="./styles.css" />
 </head>
 
 <body>
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <img
-          class="brandLogo"
-          id="brandLogo"
+        <img class="brandLogo" id="brandLogo"
           src="https://i.postimg.cc/hGj8JD0V/1614F03F-52AD-453C-8DB1-09A3B29F3469.png"
-          alt="Worm Colony Logo"
-        />
+          alt="Worm Colony Logo" />
         <div class="brandText">
           <div class="title">Worm Colony</div>
           <div class="sub">$WORM • LIVE COLONY</div>
@@ -46,12 +43,7 @@
                 <span class="pill">Inspect</span>
                 <span id="selName">Colony #1</span>
               </div>
-              <button
-                class="iconBtn"
-                id="toggleInspector"
-                type="button"
-                title="Hide/Show"
-              >▾</button>
+              <button class="iconBtn" id="toggleInspector" type="button" title="Hide/Show">▾</button>
             </div>
 
             <div class="inspectorBody" id="inspectorBody">
@@ -120,16 +112,10 @@
             <span class="eventsDot"></span>
             <span>Colony Events</span>
           </div>
-          <div class="eventsHint">
-            Only sim events (mutations, spawns, milestones).
-          </div>
+          <div class="eventsHint">Only sim events (mutations, spawns, milestones).</div>
         </div>
 
-        <div
-          class="eventLog"
-          id="eventLog"
-          aria-label="Simulation event log"
-        ></div>
+        <div class="eventLog" id="eventLog" aria-label="Simulation event log"></div>
       </section>
 
       <!-- CONTROLS -->
@@ -144,17 +130,13 @@
           <button class="neonBtn alt" data-action="storm">Volume Storm</button>
           <button class="neonBtn" data-action="mutate">Mutate</button>
 
-          <button class="neonBtn" data-action="focus" id="focusBtn">
-            Focus: Off
-          </button>
+          <button class="neonBtn" data-action="focus" id="focusBtn">Focus: Off</button>
           <button class="neonBtn alt" data-action="zoomIn">Zoom +</button>
 
           <button class="neonBtn alt" data-action="zoomOut">Zoom −</button>
           <button class="neonBtn" data-action="capture">Capture</button>
 
-          <button class="neonBtn danger wide" data-action="reset">
-            Reset
-          </button>
+          <button class="neonBtn danger wide" data-action="reset">Reset</button>
         </div>
       </section>
     </main>
@@ -164,7 +146,44 @@
     </footer>
   </div>
 
-  <!-- cache-busted JS (DO NOT RENAME FILE) -->
-  <script src="./script.js?v=20260110" defer></script>
+  <!-- ERROR OVERLAY (so we can see exactly what's breaking on the other phone) -->
+  <div id="errBox" style="
+    display:none; position:fixed; left:12px; right:12px; bottom:12px;
+    z-index:999999; padding:10px 12px; border-radius:12px;
+    background:rgba(0,0,0,.78); color:#fff; font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+    box-shadow:0 10px 30px rgba(0,0,0,.35); white-space:pre-wrap;
+  "></div>
+
+  <script>
+    (function () {
+      // Show errors on-screen (super helpful on iOS without devtools)
+      const box = document.getElementById('errBox');
+      function showErr(msg) {
+        if (!box) return;
+        box.style.display = 'block';
+        box.textContent = msg;
+      }
+
+      window.addEventListener('error', function (e) {
+        showErr('JS ERROR:\n' + (e.message || 'Unknown') + '\n' + (e.filename || '') + ':' + (e.lineno || '') + ':' + (e.colno || ''));
+      });
+
+      window.addEventListener('unhandledrejection', function (e) {
+        showErr('PROMISE REJECTION:\n' + (e.reason && (e.reason.stack || e.reason.message) ? (e.reason.stack || e.reason.message) : String(e.reason)));
+      });
+
+      // ✅ Cache-bust only when served over http/https (NOT when opened locally)
+      const isWeb = location.protocol === 'http:' || location.protocol === 'https:';
+      const version = '20260110_1';
+
+      const s = document.createElement('script');
+      s.defer = true;
+      s.src = './script.js' + (isWeb ? ('?v=' + encodeURIComponent(version)) : '');
+      s.onerror = function () {
+        showErr('FAILED TO LOAD script.js\n\nTried:\n' + s.src + '\n\nTip: make sure script.js is in the SAME folder as this HTML.');
+      };
+      document.body.appendChild(s);
+    })();
+  </script>
 </body>
 </html>
