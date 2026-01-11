@@ -1513,8 +1513,7 @@
     nc.worms.push(w);
     nc.worms.push(newWorm(nc, Math.random() < 0.25));
     nc.worms.push(newWorm(nc, Math.random() < 0.25));
-
-    \1
+    
 
     // Nutrient progress is tied to founding colonies: reset/rollover after a successful founding.
     NUTRIENT.value = 0;
