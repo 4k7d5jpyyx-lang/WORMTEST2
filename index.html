@@ -5,24 +5,22 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Worm Colony — $WORM</title>
 
-  <!-- HARD CACHE CONTROL (fixes iOS + GitHub Pages) -->
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
-
   <link rel="preconnect" href="https://i.postimg.cc" crossorigin>
 
-  <!-- Cache-busted CSS -->
-  <link rel="stylesheet" href="styles.css?v=2026-01-10" />
+  <!-- cache-busted CSS -->
+  <link rel="stylesheet" href="./styles.css?v=20260110" />
 </head>
 
 <body>
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <img class="brandLogo" id="brandLogo"
+        <img
+          class="brandLogo"
+          id="brandLogo"
           src="https://i.postimg.cc/hGj8JD0V/1614F03F-52AD-453C-8DB1-09A3B29F3469.png"
-          alt="Worm Colony Logo" />
+          alt="Worm Colony Logo"
+        />
         <div class="brandText">
           <div class="title">Worm Colony</div>
           <div class="sub">$WORM • LIVE COLONY</div>
@@ -48,7 +46,12 @@
                 <span class="pill">Inspect</span>
                 <span id="selName">Colony #1</span>
               </div>
-              <button class="iconBtn" id="toggleInspector" type="button" title="Hide/Show">▾</button>
+              <button
+                class="iconBtn"
+                id="toggleInspector"
+                type="button"
+                title="Hide/Show"
+              >▾</button>
             </div>
 
             <div class="inspectorBody" id="inspectorBody">
@@ -117,10 +120,16 @@
             <span class="eventsDot"></span>
             <span>Colony Events</span>
           </div>
-          <div class="eventsHint">Only sim events (mutations, spawns, milestones).</div>
+          <div class="eventsHint">
+            Only sim events (mutations, spawns, milestones).
+          </div>
         </div>
 
-        <div class="eventLog" id="eventLog" aria-label="Simulation event log"></div>
+        <div
+          class="eventLog"
+          id="eventLog"
+          aria-label="Simulation event log"
+        ></div>
       </section>
 
       <!-- CONTROLS -->
@@ -135,13 +144,17 @@
           <button class="neonBtn alt" data-action="storm">Volume Storm</button>
           <button class="neonBtn" data-action="mutate">Mutate</button>
 
-          <button class="neonBtn" data-action="focus" id="focusBtn">Focus: Off</button>
+          <button class="neonBtn" data-action="focus" id="focusBtn">
+            Focus: Off
+          </button>
           <button class="neonBtn alt" data-action="zoomIn">Zoom +</button>
 
           <button class="neonBtn alt" data-action="zoomOut">Zoom −</button>
           <button class="neonBtn" data-action="capture">Capture</button>
 
-          <button class="neonBtn danger wide" data-action="reset">Reset</button>
+          <button class="neonBtn danger wide" data-action="reset">
+            Reset
+          </button>
         </div>
       </section>
     </main>
@@ -151,7 +164,7 @@
     </footer>
   </div>
 
-  <!-- Cache-busted JS (THIS FIXES THE BROKEN SHARED LINK) -->
-  <script src="script.js?v=2026-01-10" defer></script>
+  <!-- cache-busted JS (DO NOT RENAME FILE) -->
+  <script src="./script.js?v=20260110" defer></script>
 </body>
 </html>
