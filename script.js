@@ -2289,3 +2289,42 @@ if (document.readyState === "complete") {
 
   console.log("[PATCH] Nutrient → Colony founding bridge applied");
 })();
+/* =====================================================
+   FINAL FIX: Colony Founding Trigger (Nutrient-Based)
+   Ensures colonies actually form when nutrients are full
+===================================================== */
+
+(function () {
+  if (window.__finalColonyFixApplied) return;
+  window.__finalColonyFixApplied = true;
+
+  if (
+    typeof NUTRIENT === "undefined" ||
+    typeof scheduleFounderMission !== "function"
+  ) {
+    console.warn("[FINAL FIX] Missing symbols — cannot attach");
+    return;
+  }
+
+  let lastNutrientValue = 0;
+
+  function colonyFoundingWatcher() {
+    // Detect fresh transition to FULL (not just staying full)
+    if (
+      NUTRIENT.value >= NUTRIENT.cap &&
+      lastNutrientValue < NUTRIENT.cap
+    ) {
+      if (colonies.length < MAX_COLONIES) {
+        scheduleFounderMission();
+        NUTRIENT.value = 0; // RESET after mission launch
+        updateNutrientUI?.();
+      }
+    }
+
+    lastNutrientValue = NUTRIENT.value;
+    requestAnimationFrame(colonyFoundingWatcher);
+  }
+
+  requestAnimationFrame(colonyFoundingWatcher);
+  console.log("[FINAL FIX] Nutrient → Colony founding ACTIVE");
+})();
