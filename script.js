@@ -2232,3 +2232,24 @@
   window.addEventListener("load", boot);
   if (document.readyState === "complete") boot();
 })();
+// =========================
+// BOOT SAFETY GUARD (FIXES MOBILE BREAK)
+// =========================
+let __WORM_COLONY_BOOTED__ = false;
+
+// wrap original boot safely
+const __originalBoot = boot;
+boot = function () {
+  if (__WORM_COLONY_BOOTED__) return;
+  __WORM_COLONY_BOOTED__ = true;
+  __originalBoot();
+};
+
+// IMPORTANT: only allow ONE startup path
+window.removeEventListener("load", __originalBoot);
+window.addEventListener("load", boot);
+
+// REMOVE this behavior by neutralizing it
+if (document.readyState === "complete") {
+  // do nothing — load event will handle it
+}
