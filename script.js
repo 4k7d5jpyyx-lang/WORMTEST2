@@ -126,7 +126,6 @@
 
   function pulseBigToast(msg) {
     setToast(msg, 2400);
-    // toned down: less screen shake spam
     worldShake(7, 520);
   }
 
@@ -262,20 +261,69 @@
   let isInteracting = false;
 
   // =========================
+  // Cinematic boss spawn camera (ONLY on boss spawn)
+  // =========================
+  let bossCine = null; // {t, durIn, hold, durOut, px,py,pz, tx,ty,tz}
+  function easeInOutQuad(t) {
+    return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  }
+  function startBossCinematic(targetX, targetY) {
+    // don't fight the user while dragging/zooming
+    if (isInteracting || dragging) return;
+
+    bossCine = {
+      t: 0,
+      durIn: 0.9,
+      hold: 0.85,
+      durOut: 1.1,
+      px: camX,
+      py: camY,
+      pz: zoom,
+      tx: -targetX,
+      ty: -targetY,
+      tz: clamp(zoom * 1.25, 0.75, 2.2),
+    };
+  }
+  function updateBossCinematic(dt) {
+    if (!bossCine) return;
+
+    const s = bossCine;
+    s.t += dt;
+
+    const inEnd = s.durIn;
+    const holdEnd = s.durIn + s.hold;
+    const outEnd = s.durIn + s.hold + s.durOut;
+
+    if (s.t <= inEnd) {
+      const k = easeInOutQuad(clamp(s.t / s.durIn, 0, 1));
+      camX = lerp(s.px, s.tx, k);
+      camY = lerp(s.py, s.ty, k);
+      zoom = lerp(s.pz, s.tz, k);
+    } else if (s.t <= holdEnd) {
+      camX = s.tx; camY = s.ty; zoom = s.tz;
+    } else if (s.t <= outEnd) {
+      const k = easeInOutQuad(clamp((s.t - holdEnd) / s.durOut, 0, 1));
+      camX = lerp(s.tx, s.px, k);
+      camY = lerp(s.ty, s.py, k);
+      zoom = lerp(s.tz, s.pz, k);
+    } else {
+      bossCine = null;
+    }
+  }
+
+  // =========================
   // World shake (TONED DOWN)
   // =========================
   let shakeMag = 0;
   let shakeEnd = 0;
   let shakeSeed = rand(0, 9999);
-  const SHAKE_SCALE = 0.42;        // global reduction
-  const SHAKE_COOLDOWN_MS = 180;   // prevent constant shaking
+  const SHAKE_SCALE = 0.42;
+  const SHAKE_COOLDOWN_MS = 180;
   let lastShakeAt = 0;
 
   function worldShake(mag = 10, ms = 520) {
     const now = performance.now();
     let m = mag * SHAKE_SCALE;
-
-    // if shakes are happening constantly, damp them hard
     if (now - lastShakeAt < SHAKE_COOLDOWN_MS) m *= 0.32;
     lastShakeAt = now;
 
@@ -397,6 +445,222 @@
   }
 
   // =========================
+  // Nutrients: UI + Physical orbs + (buys/volume => spawn rate)
+  // =========================
+  const NUTRIENT = {
+    value: 0,
+    cap: 120,
+    orbs: [], // {x,y,r,val,drift,hue}
+  };
+
+  function ensureNutrientUI() {
+    // Remove any old/ugly nutrient bars by replacing our own UI container
+    let old = document.getElementById("nutrientHud");
+    if (old) return;
+
+    const hud = document.createElement("div");
+    hud.id = "nutrientHud";
+    hud.style.cssText = `
+      position: sticky;
+      top: 56px;
+      z-index: 80;
+      margin: 8px 12px;
+      padding: 10px 10px 9px;
+      border-radius: 14px;
+      background: rgba(10,14,20,.62);
+      backdrop-filter: blur(10px);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
+      user-select: none;
+    `;
+
+    const row = document.createElement("div");
+    row.style.cssText = `
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
+      margin-bottom:8px;
+      font: 700 12px system-ui, -apple-system, Inter, sans-serif;
+      letter-spacing:.08em;
+      color: rgba(235,245,255,.85);
+      text-transform: uppercase;
+    `;
+
+    const left = document.createElement("div");
+    left.textContent = "Nutrients";
+
+    const right = document.createElement("div");
+    right.id = "nutrientText";
+    right.style.cssText = `font-weight:800; letter-spacing:.06em; color: rgba(235,245,255,.78);`;
+    right.textContent = "0%";
+
+    row.appendChild(left);
+    row.appendChild(right);
+
+    const bar = document.createElement("div");
+    bar.style.cssText = `
+      height: 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.10);
+      overflow: hidden;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.10);
+    `;
+
+    const fill = document.createElement("div");
+    fill.id = "nutrientFill";
+    fill.style.cssText = `
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg,#2aff88,#6cfaff,#a78bfa);
+      box-shadow: 0 0 10px rgba(140,255,200,.55);
+      transition: width .22s ease;
+    `;
+
+    bar.appendChild(fill);
+    hud.appendChild(row);
+    hud.appendChild(bar);
+
+    document.body.prepend(hud);
+  }
+
+  function setNutrientCapFromWorld() {
+    // scales with progress, but stays reasonable
+    const g = growthScore();
+    NUTRIENT.cap = clamp(120 + Math.floor(g * 28), 120, 900);
+  }
+
+  function updateNutrientUI() {
+    const fill = document.getElementById("nutrientFill");
+    const txt = document.getElementById("nutrientText");
+    if (!fill || !txt) return;
+
+    const pct = clamp((NUTRIENT.value / Math.max(1, NUTRIENT.cap)) * 100, 0, 100);
+    fill.style.width = pct.toFixed(1) + "%";
+    txt.textContent = pct.toFixed(0) + "%";
+  }
+
+  function addNutrientValue(v) {
+    NUTRIENT.value = clamp(NUTRIENT.value + v, 0, NUTRIENT.cap);
+  }
+
+  function spawnNutrientOrb(col, amount = null) {
+    // spawn around colony ring
+    const a = rand(0, Math.PI * 2);
+    const d = rand(180, 520) + colonies.length * rand(0.2, 1.6);
+    const val = amount ?? rand(6, 18);
+
+    NUTRIENT.orbs.push({
+      x: col.x + Math.cos(a) * d,
+      y: col.y + Math.sin(a) * d,
+      r: rand(4.2, 7.6),
+      val,
+      drift: rand(0, 9999),
+      hue: (col.dna.hue + rand(-55, 85) + 360) % 360,
+    });
+
+    // cap orb count to keep perf stable
+    const MAX_ORBS = 520;
+    if (NUTRIENT.orbs.length > MAX_ORBS) NUTRIENT.orbs.splice(0, NUTRIENT.orbs.length - MAX_ORBS);
+  }
+
+  function spawnNutrientsFromActivity(dBuyers, dVolume) {
+    // This is the key mapping you asked for:
+    //   buys/volume increases => more nutrient orbs spawn
+    // Tuned so you visibly see food on Small Buy / Whale Buy / Storm.
+    if (!colonies.length) return;
+
+    const volUnits = Math.max(0, dVolume);
+    const buyUnits = Math.max(0, dBuyers);
+
+    // Core conversion (tweak these 2 if you want more/less food)
+    const fromVolume = Math.floor(volUnits / 650); // ~1 orb per $650 volume
+    const fromBuys = buyUnits * 2;                 // 2 orbs per buyer
+
+    let count = fromVolume + fromBuys;
+    if (count <= 0) return;
+
+    // distribute between some colonies so the map looks alive
+    const pickCount = Math.min(colonies.length, 4);
+    for (let i = 0; i < count; i++) {
+      const idx = (selected + randi(0, pickCount - 1)) % colonies.length;
+      spawnNutrientOrb(colonies[idx]);
+    }
+  }
+
+  function drawNutrients(time) {
+    if (!NUTRIENT.orbs.length) return;
+
+    ctx.globalCompositeOperation = "lighter";
+    for (const n of NUTRIENT.orbs) {
+      const p = 0.55 + 0.45 * Math.sin(time * 0.003 + n.drift);
+      const rr = n.r * (3.2 + p * 0.9);
+
+      const g = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, rr);
+      g.addColorStop(0, `hsla(${n.hue}, 95%, 75%, ${0.72 * p})`);
+      g.addColorStop(1, `hsla(${n.hue}, 95%, 75%, 0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, rr, 0, Math.PI * 2);
+      ctx.fill();
+
+      // bright core
+      ctx.fillStyle = `hsla(${(n.hue + 20) % 360}, 95%, 82%, ${0.65 * p})`;
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  function wormsEatNutrients() {
+    if (!NUTRIENT.orbs.length) return;
+
+    for (const c of colonies) {
+      for (const w of c.worms) {
+        const h = w.segs?.[0];
+        if (!h) continue;
+
+        for (let i = NUTRIENT.orbs.length - 1; i >= 0; i--) {
+          const n = NUTRIENT.orbs[i];
+          const d = Math.hypot(h.x - n.x, h.y - n.y);
+
+          // boss mouths are bigger
+          const bite = (w.isBoss ? 18 : 12) + n.r;
+          if (d < bite) {
+            NUTRIENT.orbs.splice(i, 1);
+            addNutrientValue(n.val);
+            // No reverse economy injection here (you asked: economy => spawn nutrients)
+            // but we still give small visual feedback:
+            if (Math.random() < 0.18) worldShake(5, 180);
+          }
+        }
+      }
+    }
+  }
+
+  function steerToNearestNutrient(w) {
+    if (!NUTRIENT.orbs.length) return null;
+    const h = w.segs?.[0];
+    if (!h) return null;
+
+    // Keep seeking subtle so it doesn't break your core movement feel
+    const SEEK_RANGE = w.isBoss ? 520 : 420;
+
+    let best = null;
+    let bestD = SEEK_RANGE;
+
+    for (const n of NUTRIENT.orbs) {
+      const d = Math.hypot(n.x - h.x, n.y - h.y);
+      if (d < bestD) { bestD = d; best = n; }
+    }
+    if (!best) return null;
+
+    const strength = clamp(1 - bestD / SEEK_RANGE, 0, 1);
+    return { ang: Math.atan2(best.y - h.y, best.x - h.x), strength };
+  }
+
+  // =========================
   // Background
   // =========================
   const bg = {
@@ -415,7 +679,6 @@
     const b = bg.ctx;
     b.clearRect(0, 0, bg.w, bg.h);
 
-    // nebula blobs
     for (let i = 0; i < 10; i++) {
       const x = rand(0, bg.w), y = rand(0, bg.h);
       const r = rand(160, 360);
@@ -429,7 +692,6 @@
       b.fill();
     }
 
-    // galaxy swirls
     b.globalCompositeOperation = "lighter";
     for (let i = 0; i < 7; i++) {
       const cx = rand(0, bg.w), cy = rand(0, bg.h);
@@ -454,7 +716,6 @@
     }
     b.globalCompositeOperation = "source-over";
 
-    // stars
     for (let i = 0; i < 1400; i++) {
       const x = rand(0, bg.w), y = rand(0, bg.h);
       const r = Math.random() < 0.90 ? rand(0.3, 1.2) : rand(1.2, 2.2);
@@ -645,25 +906,19 @@
     const limbChance = clamp(0.10 + col.dna.limbiness * 0.22, 0.12, 0.60);
     if (Math.random() < limbChance) addLimb(w, big);
 
-    // -------------------------
-    // BOSS PROFILES (different behavior + different visuals)
-    // -------------------------
     if (special) {
       w.isBoss = true;
 
-      // defaults for bosses
       w.width *= 2.05;
       w.speed *= 1.00;
       w.turn *= 0.90;
       w.pat.sparkle = true;
 
-      // personal spacing so bosses don't stack on top of each other
       w.bossPersonalSpace = rand(240, 420);
       w.roamR = rand(260, 520);
       w.roamR2 = rand(0, Math.PI * 2);
       w.roamBias = rand(0.18, 0.42);
 
-      // make each boss feel distinct
       switch (special) {
         case "SOL_STORM":
           w.hue = 175; w.pat.hue2 = 285;
@@ -758,7 +1013,6 @@
           break;
       }
 
-      // boss cadence: do something every 15–20s (first sooner)
       w.__nextBossUlt = performance.now() + rand(5500, 9000);
     }
 
@@ -819,9 +1073,9 @@
   function shockwave(col, strength = 1, hueOverride = null) {
     col.shock.push({
       r: 0,
-      v: 2.4 + strength * 1.2,            // slower ring
-      a: 0.58 + strength * 0.08,          // lower alpha
-      w: 1.5 + strength * 0.9,            // thinner
+      v: 2.4 + strength * 1.2,
+      a: 0.58 + strength * 0.08,
+      w: 1.5 + strength * 0.9,
       hue: hueOverride
     });
     playSfx("shock", strength * 0.9);
@@ -893,11 +1147,9 @@
 
     ctx.globalCompositeOperation = "lighter";
 
-    // base halos
     aura(head.x, head.y, ringR * 4.2, w.hue, 0.10 + pulse * 0.05);
     aura(head.x, head.y, ringR * 2.8, (w.pat.hue2 ?? ((w.hue + 90) % 360)), 0.05 + pulse * 0.05);
 
-    // unique rune ring
     const runeCount =
       w.special === "SOL_STORM" ? 18 :
       w.special === "FIRE_DOGE" ? 14 :
@@ -911,7 +1163,6 @@
     ctx.arc(head.x, head.y, ringR, 0, Math.PI * 2);
     ctx.stroke();
 
-    // rune ticks
     ctx.strokeStyle = `hsla(${(w.hue + 90) % 360}, 95%, 76%, ${0.22 + pulse * 0.24})`;
     ctx.lineWidth = 1.4;
     for (let i = 0; i < runeCount; i++) {
@@ -924,7 +1175,6 @@
       ctx.stroke();
     }
 
-    // extra: vortex spiral for VALIDATOR_VORTEX
     if (w.special === "VALIDATOR_VORTEX") {
       ctx.strokeStyle = `hsla(${(w.hue + 30) % 360}, 95%, 72%, ${0.22 + pulse * 0.18})`;
       ctx.lineWidth = 1.2;
@@ -941,7 +1191,6 @@
       ctx.stroke();
     }
 
-    // event horizon: dark core
     if (w.special === "EVENT_HORIZON") {
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.beginPath();
@@ -954,7 +1203,6 @@
       ctx.stroke();
     }
 
-    // sparks (slightly reduced)
     if (!w.__sparkT) w.__sparkT = 0;
     const sparkRate =
       w.special === "FIRE_DOGE" ? rand(55, 110) :
@@ -990,7 +1238,6 @@
     }
     w.sparks = w.sparks.filter(s => s.a > 0.06);
 
-    // boss trail (more distinct per boss)
     if (!w.trail) w.trail = [];
     w.trail.push({ x: head.x, y: head.y, a: 0.16 });
     const trailCap = w.special === "SOL_STORM" ? 34 : w.special === "EVENT_HORIZON" ? 42 : 28;
@@ -1032,7 +1279,6 @@
       isInteracting ? null : glowA
     );
 
-    // patterns (skip when interacting)
     if (!isInteracting) {
       for (let i = 0; i < pts.length; i += 2) {
         const p = pts[i];
@@ -1069,7 +1315,6 @@
       }
     }
 
-    // limbs
     if (w.limbs?.length) {
       ctx.globalCompositeOperation = isInteracting ? "source-over" : "lighter";
       for (const L of w.limbs) {
@@ -1097,10 +1342,8 @@
       ctx.globalCompositeOperation = "source-over";
     }
 
-    // boss attention FX
     if (w.isBoss && !isInteracting) drawBossFX(w, time);
 
-    // draw breath particles
     if (w.breath?.length && !isInteracting) {
       ctx.globalCompositeOperation = "lighter";
       for (const p of w.breath) {
@@ -1243,7 +1486,6 @@
   // Worm behavior
   // =========================
   function bossSeparationSteer(col, w, head) {
-    // keep bosses from clumping
     if (!w.isBoss) return null;
 
     let ax = 0, ay = 0;
@@ -1318,7 +1560,6 @@
       w.roamR = clamp(w.roamR + rand(-90, 90), w.isBoss ? 220 : 90, w.isBoss ? 1400 : 380);
       w.roamR2 = rand(0, Math.PI * 2);
 
-      // FIRE_DOGE: frequent charge bursts
       if (w.isBoss && w.special === "FIRE_DOGE") {
         w.huntT = rand(0.55, 1.25);
         w.wanderA = rand(0, Math.PI * 2);
@@ -1342,7 +1583,6 @@
 
     let desired = toRing;
 
-    // worm types feel different
     if (w.type === "DRIFTER") {
       desired = lerpAngle(toRing, field, 0.32 + w.roamBias);
     } else if (w.type === "ORBITER") {
@@ -1355,25 +1595,29 @@
 
     // bosses: unique steering flavor
     if (w.isBoss) {
-      if (w.special === "SOL_STORM") desired = lerpAngle(desired, field, 0.42);          // flow-driven
-      if (w.special === "ICE_QUEEN") desired = lerpAngle(desired, toCol + 1.2, 0.22);    // regal orbit
-      if (w.special === "VALIDATOR_VORTEX") desired = lerpAngle(desired, toCol + w.orbitDir * 1.6, 0.30); // hard spiral
-      if (w.special === "EVENT_HORIZON") desired = lerpAngle(desired, toCol, 0.18);      // ominous center pull
+      if (w.special === "SOL_STORM") desired = lerpAngle(desired, field, 0.42);
+      if (w.special === "ICE_QUEEN") desired = lerpAngle(desired, toCol + 1.2, 0.22);
+      if (w.special === "VALIDATOR_VORTEX") desired = lerpAngle(desired, toCol + w.orbitDir * 1.6, 0.30);
+      if (w.special === "EVENT_HORIZON") desired = lerpAngle(desired, toCol, 0.18);
     }
 
-    // repel from colony center if too close
+    // Nutrient seeking (subtle blend so it doesn't break your mechanics)
+    const seek = steerToNearestNutrient(w);
+    if (seek) {
+      const wgt = (w.isBoss ? 0.10 : 0.16) * seek.strength;
+      desired = lerpAngle(desired, seek.ang, wgt);
+    }
+
     if (centerRepel > 0) {
       const away = Math.atan2(head.y - col.y, head.x - col.x);
       desired = lerpAngle(desired, away, 0.55 * centerRepel);
     }
 
-    // repel bosses from each other (prevents clumping)
     const sepA = bossSeparationSteer(col, w, head);
     if (sepA !== null) {
       desired = lerpAngle(desired, sepA, 0.38);
     }
 
-    // burst/zigzag
     if (w.huntT > 0) {
       w.huntT = Math.max(0, w.huntT - dt);
       desired = lerpAngle(desired, w.wanderA, w.isBoss ? 0.42 : 0.35);
@@ -1386,20 +1630,16 @@
     const boost = w.isBoss ? 1.65 : 1.0;
     const spBase = w.speed * 2.45 * boost * freezeSlow;
 
-    // FIRE_DOGE charge punch
     let sp = spBase;
     if (w.isBoss && w.special === "FIRE_DOGE") {
       const pulse = 0.65 + 0.35 * Math.sin(time * 0.003 + w.phase);
       sp = spBase * (1.06 + pulse * 0.18);
     }
-
-    // EVENT HORIZON slow/heavy
     if (w.isBoss && w.special === "EVENT_HORIZON") sp *= 0.92;
 
     head.x += Math.cos(head.a) * sp;
     head.y += Math.sin(head.a) * sp;
 
-    // leash (bosses roam wider)
     const d = Math.hypot(head.x - col.x, head.y - col.y);
     const leash = (w.isBoss ? 860 : 420) + 110 * col.dna.aura + (w.isBoss ? w.roamR * 0.25 : 0);
     if (d > leash) {
@@ -1408,7 +1648,6 @@
       head.a = lerpAngle(head.a, toCol, 0.22);
     }
 
-    // follow segments
     for (let i = 1; i < w.segs.length; i++) {
       const prev = w.segs[i - 1];
       const seg = w.segs[i];
@@ -1425,7 +1664,6 @@
       seg.a = ang;
     }
 
-    // Boss ultimates
     if (w.isBoss) {
       if (!w.__nextBossUlt) w.__nextBossUlt = time + rand(15000, 20000);
       if (time >= w.__nextBossUlt) {
@@ -1434,7 +1672,6 @@
       }
     }
 
-    // decay breath particles
     if (w.breath?.length) {
       for (const p of w.breath) {
         p.x += p.vx;
@@ -1449,7 +1686,7 @@
   }
 
   // =========================
-  // Boss Ultimate FX (varies per boss; shakes are subtle)
+  // Boss Ultimate FX
   // =========================
   function spray(w, head, dir, count, hueA, hueB, speedA, speedB, rA, rB, lA, lB, spread = 1.0) {
     for (let k = 0; k < count; k++) {
@@ -1476,13 +1713,11 @@
     pulseBigToast(`${name}!`);
     playSfx("boss", 1.05);
 
-    // default subtle shake + ring
     worldShake(10, 520);
     shockwave(col, 1.4, w.hue);
 
     const dir = head.a;
 
-    // each boss does different visuals + small gameplay flavor
     switch (w.special) {
       case "FIRE_DOGE":
         playSfx("fire", 1.0);
@@ -1507,11 +1742,9 @@
         break;
 
       case "HYDRAWORM":
-        // multi-ring burst, less shake
         worldShake(9, 520);
         for (let i = 0; i < 4; i++) shockwave(col, 1.1 - i * 0.10, 140);
         spray(w, head, dir, 120, 120, 170, 2.0, 5.2, 1.8, 5.2, 58, 76, 1.25);
-        // tiny bonus: hatchlings
         if (Math.random() < 0.35) {
           const total = colonies.reduce((a, c) => a + c.worms.length, 0);
           if (total < MAX_WORMS) col.worms.push(newWorm(col, Math.random() < 0.18));
@@ -1519,13 +1752,12 @@
         break;
 
       case "MOONJUDGE":
-        // gravity pulse: pulls worms inward briefly (soft)
         worldShake(9, 520);
         shockwave(col, 1.4, 265);
         spray(w, head, dir + Math.PI, 140, 250, 290, 1.6, 4.6, 1.8, 4.8, 62, 86, 0.95);
         for (const ww of col.worms) {
           if (ww === w) continue;
-          ww.__roamChange = time + rand(120, 420); // force target shuffle
+          ww.__roamChange = time + rand(120, 420);
           ww.roamR = clamp(ww.roamR * rand(0.85, 1.05), 90, ww.isBoss ? 1400 : 380);
         }
         break;
@@ -1534,7 +1766,6 @@
         worldShake(10, 560);
         shockwave(col, 1.5, 195);
         spray(w, head, rand(0, Math.PI * 2), 160, 165, 210, 1.8, 5.4, 2.2, 6.0, 60, 82, 1.15);
-        // economy flavor: small organic “whale splash”
         buyers += randi(1, 3);
         volume += rand(1800, 5200);
         mcap += rand(3500, 11000);
@@ -1544,7 +1775,6 @@
         worldShake(10, 560);
         shockwave(col, 1.5, 32);
         spray(w, head, dir, 150, 25, 80, 2.2, 5.8, 2.0, 6.2, 58, 78, 1.0);
-        // mutation burst (keeps your mechanics)
         for (let i = 0; i < 2; i++) if (Math.random() < 0.7) mutateRandom();
         break;
 
@@ -1552,7 +1782,6 @@
         worldShake(11, 520);
         shockwave(col, 1.6, 105);
         spray(w, head, dir, 170, 90, 210, 2.6, 7.0, 1.8, 5.0, 62, 84, 1.05);
-        // temporary spawn acceleration
         w.__viralBoostT = time + 6000;
         break;
 
@@ -1577,20 +1806,17 @@
       case "EVENT_HORIZON":
         worldShake(8, 650);
         shockwave(col, 1.6, 260);
-        // inward pull particles
         spray(w, head, dir + Math.PI, 160, 240, 300, 1.2, 4.2, 1.6, 4.0, 52, 74, 0.9);
         break;
 
       case "WYRM_EMPEROR":
         worldShake(12, 820);
         shockwave(col, 2.0, w.hue);
-        // “final form” double spray
         spray(w, head, dir, 220, 10, 70, 2.4, 6.8, 2.4, 7.2, 58, 86, 1.25);
         spray(w, head, dir + Math.PI, 160, 160, 320, 1.8, 5.4, 1.8, 5.2, 58, 86, 1.15);
         break;
 
       default:
-        // fallback
         spray(w, head, dir, 140, (w.hue + 10) % 360, (w.hue + 80) % 360, 2.0, 5.8, 1.8, 5.0, 60, 82, 1.05);
         break;
     }
@@ -1649,13 +1875,9 @@
     if (total >= MAX_WORMS) return;
 
     const g = growthScore();
-
-    // old mechanic preserved, just raised max
     const target = clamp(Math.floor(3 + g * 2.1), 3, MAX_WORMS);
-
     if (total >= target) return;
 
-    // Viral Viper: temporary boost increases hatch frequency slightly
     let viralBoost = 1.0;
     for (const c of colonies) {
       for (const w of c.worms) {
@@ -1690,13 +1912,12 @@
   }
 
   // =========================
-  // Boss milestone table (includes your new bosses)
+  // Boss milestone table
   // =========================
   const BOSS_MILESTONES = [
     { at:  50000,  special: "SOL_STORM",        name: "SOLANA STORM WORM", hue: 175, shockHue: 175 },
     { at: 100000,  special: "FIRE_DOGE",        name: "FIRE DOGE WORM",     hue: 22,  shockHue: 22  },
     { at: 250000,  special: "ICE_QUEEN",        name: "ICE QUEEN",         hue: 200, shockHue: 200 },
-
     { at: 500000,  special: "HYDRAWORM",        name: "HYDRAWORM",                 hue: 140, shockHue: 140 },
     { at:1000000,  special: "MOONJUDGE",        name: "MOONJUDGE WYRM",             hue: 265, shockHue: 265 },
     { at:1500000,  special: "WHALE_SUMMONER",   name: "WHALE SUMMONER",             hue: 195, shockHue: 195 },
@@ -1725,15 +1946,17 @@
         const boss = newWorm(c, true, m.special);
         c.worms.push(boss);
 
-        // subtle spawn FX
         shockwave(c, 1.6, m.shockHue);
         worldShake(10, 620);
 
-        // ICE QUEEN still does a little freeze on spawn (keeps your vibe)
         if (m.special === "ICE_QUEEN") c.freezeT = 2.4;
 
         announceBossSpawn(m.name);
         setToast(`👑 ${m.name} arrived`, 1800);
+
+        // Cinematic camera pull ONLY on boss spawn
+        const head = boss.segs?.[0];
+        if (head) startBossCinematic(head.x, head.y);
       }
     }
   }
@@ -1746,38 +1969,56 @@
     if (btn) btn.addEventListener("click", () => { ensureAudio(); fn(); });
   }
 
-  bind("feed", () => { volume += rand(20, 90); mcap += rand(120, 460); });
-  bind("smallBuy", () => {
-    buyers += 1;
-    const dv = rand(180, 900), dm = rand(900, 3200);
+  bind("feed", () => {
+    const dv = rand(20, 90);
+    const dm = rand(120, 460);
     volume += dv; mcap += dm;
+    spawnNutrientsFromActivity(0, dv);
   });
+
+  bind("smallBuy", () => {
+    const dBuy = 1;
+    const dv = rand(180, 900), dm = rand(900, 3200);
+    buyers += dBuy;
+    volume += dv; mcap += dm;
+    spawnNutrientsFromActivity(dBuy, dv);
+  });
+
   bind("whaleBuy", () => {
-    const b = randi(2, 5);
+    const dBuy = randi(2, 5);
     const dv = rand(2500, 8500), dm = rand(9000, 22000);
-    buyers += b; volume += dv; mcap += dm;
+    buyers += dBuy; volume += dv; mcap += dm;
     shockwave(colonies[0], 1.0);
+    spawnNutrientsFromActivity(dBuy, dv);
   });
+
   bind("sell", () => {
     const dv = rand(600, 2600), dm = rand(2200, 9000);
     volume = Math.max(0, volume - dv);
     mcap = Math.max(0, mcap - dm);
+    // no nutrient spawn on sells
   });
+
   bind("storm", () => {
     const dv = rand(5000, 18000), dm = rand(2000, 8000);
     volume += dv; mcap += dm;
     shockwave(colonies[0], 1.0);
     worldShake(7, 420);
+    spawnNutrientsFromActivity(0, dv);
   });
+
   bind("mutate", () => mutateRandom());
+
   bind("focus", () => {
     focusOn = !focusOn;
     const btn = $("focusBtn");
     if (btn) btn.textContent = `Focus: ${focusOn ? "On" : "Off"}`;
     if (focusOn) centerOnSelected(false);
   });
+
   bind("zoomIn", () => (zoom = clamp(zoom * 1.12, 0.55, 2.8)));
   bind("zoomOut", () => (zoom = clamp(zoom * 0.88, 0.55, 2.8)));
+
   bind("capture", () => {
     try {
       const url = canvas.toDataURL("image/png");
@@ -1790,6 +2031,7 @@
       pushLog("event", "Capture blocked by iOS — screenshot/share instead");
     }
   });
+
   bind("reset", () => location.reload());
 
   // =========================
@@ -1809,6 +2051,9 @@
   // =========================
   // Main step/render
   // =========================
+  let lastVolume = 0;
+  let lastBuyers = 0;
+
   function step(dt, time) {
     trySplitByMcap();
     checkMilestones();
@@ -1827,7 +2072,7 @@
 
       for (const s of c.shock) {
         s.r += s.v;
-        s.a *= 0.968; // slightly faster fade
+        s.a *= 0.968;
       }
       c.shock = c.shock.filter((s) => s.a > 0.05);
     }
@@ -1837,9 +2082,12 @@
       for (const w of c.worms) wormBehavior(c, w, time, dt);
     }
 
+    // worms consume nutrients after movement (feels responsive)
+    wormsEatNutrients();
+
     if (focusOn) centerOnSelected(true);
 
-    // auto mutations (unchanged)
+    // Auto mutations
     mutTimer += dt;
     const g = growthScore();
     const mutRate = clamp(2.2 - g * 0.07, 0.35, 2.2);
@@ -1849,6 +2097,20 @@
     }
 
     maybeSpawnWorms(dt);
+
+    // If volume/buyers changed from other systems (boss ult whales, etc), spawn nutrients too
+    const dV = volume - lastVolume;
+    const dB = buyers - lastBuyers;
+    if (dV > 0 || dB > 0) spawnNutrientsFromActivity(dB, dV);
+    lastVolume = volume;
+    lastBuyers = buyers;
+
+    // Nutrient cap scales with progress
+    setNutrientCapFromWorld();
+    updateNutrientUI();
+
+    // Boss cinematic camera update (only on spawn)
+    updateBossCinematic(dt);
 
     // keep toast alive
     if (toast) {
@@ -1870,6 +2132,9 @@
     ctx.translate(W / 2 + sh.sx, H / 2 + sh.sy);
     ctx.scale(zoom, zoom);
     ctx.translate(camX, camY);
+
+    // Draw physical nutrients in world space
+    drawNutrients(time);
 
     for (const c of colonies) drawColony(c, time);
     for (const c of colonies) for (const w of c.worms) drawWorm(w, time);
@@ -1911,6 +2176,9 @@
     updateStats();
     updateInspector();
 
+    ensureNutrientUI();
+    updateNutrientUI();
+
     pushLog("event", "Simulation ready");
     setToast("JS LOADED ✓ (rendering)", 1200);
 
@@ -1919,366 +2187,4 @@
 
   window.addEventListener("load", boot);
   if (document.readyState === "complete") boot();
-})();
-/* ============================================================
-   SAFE EXTENSION PATCH — DO NOT REMOVE EXISTING CODE
-   This file augments the existing simulation ONLY
-============================================================ */
-
-/* ---------- Nutrient Bar Injection (no HTML edits) ---------- */
-(function injectNutrientBar(){
-  if (document.getElementById("nutrientFill")) return;
-
-  const wrap = document.createElement("div");
-  wrap.style.cssText = `
-    position: sticky;
-    top: 56px;
-    z-index: 30;
-    margin: 10px 12px;
-    height: 14px;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.08);
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
-    overflow: hidden;
-  `;
-
-  const fill = document.createElement("div");
-  fill.id = "nutrientFill";
-  fill.style.cssText = `
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(
-      90deg,
-      #22ff88,
-      #6cfaff,
-      #a78bfa
-    );
-    transition: width .25s ease;
-    box-shadow: 0 0 14px rgba(120,255,200,.6);
-  `;
-
-  wrap.appendChild(fill);
-  const app = document.querySelector(".app") || document.body;
-  app.insertBefore(wrap, app.children[1] || app.firstChild);
-})();
-
-/* ---------- Nutrient Tracking (non-destructive) ---------- */
-window.__nutrients ??= 0;
-window.__nutrientCap ??= 100;
-
-function addNutrients(v){
-  window.__nutrients = Math.min(
-    window.__nutrients + v,
-    window.__nutrientCap
-  );
-  const el = document.getElementById("nutrientFill");
-  if (el) {
-    el.style.width =
-      (window.__nutrients / window.__nutrientCap * 100).toFixed(1) + "%";
-  }
-}
-
-/* ---------- Soft Center Repulsion (anti-bundling) ---------- */
-window.__applyAntiClump ??= function(col){
-  for (const w of col.worms) {
-    const h = w.segs?.[0];
-    if (!h) continue;
-
-    const dx = h.x - col.x;
-    const dy = h.y - col.y;
-    const d = Math.hypot(dx, dy);
-
-    if (d < 140) {
-      const k = (140 - d) / 140;
-      h.x += (dx / (d + 0.01)) * k * 2.2;
-      h.y += (dy / (d + 0.01)) * k * 2.2;
-    }
-  }
-};
-
-/* ---------- Boss-to-Boss Separation (no grouping) ---------- */
-window.__bossRepel ??= function(col){
-  const bosses = col.worms.filter(w => w.isBoss);
-  for (let i = 0; i < bosses.length; i++) {
-    for (let j = i + 1; j < bosses.length; j++) {
-      const a = bosses[i].segs?.[0];
-      const b = bosses[j].segs?.[0];
-      if (!a || !b) continue;
-
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
-      const d = Math.hypot(dx, dy);
-
-      if (d > 0 && d < 360) {
-        const k = (360 - d) / 360;
-        a.x += dx / d * k * 3.0;
-        a.y += dy / d * k * 3.0;
-        b.x -= dx / d * k * 3.0;
-        b.y -= dy / d * k * 3.0;
-      }
-    }
-  }
-};
-
-/* ---------- Boss Shockwave Dampening ---------- */
-if (window.worldShake) {
-  const _shake = window.worldShake;
-  window.worldShake = function(mag, ms){
-    _shake(mag * 0.6, ms * 0.8);
-  };
-}
-
-/* ---------- Colony Tick Hook (safe) ---------- */
-window.__postColonyTick ??= function(){
-  if (!window.colonies) return;
-
-  for (const c of colonies) {
-    __applyAntiClump(c);
-    __bossRepel(c);
-  }
-
-  // nutrients grow slowly with activity
-  addNutrients(0.15);
-};
-
-/* ---------- Attach Hook Once ---------- */
-if (!window.__hookedColonyTick) {
-  window.__hookedColonyTick = true;
-
-  const _step = window.step;
-  if (typeof _step === "function") {
-    window.step = function(dt, time){
-      _step(dt, time);
-      __postColonyTick();
-    };
-  }
-}
-/* =========================================================
-   PATCH: Nutrients + World Food + Boss Spawn Cinematics
-   SAFE TO PASTE AT BOTTOM — NO OVERRIDES
-========================================================= */
-(() => {
-  if (window.__WORM_NUTRIENT_PATCH__) return;
-  window.__WORM_NUTRIENT_PATCH__ = true;
-
-  /* ---------- Nutrient UI ---------- */
-  function ensureNutrientUI() {
-    if (document.getElementById("nutrientWrap")) return;
-
-    const wrap = document.createElement("div");
-    wrap.id = "nutrientWrap";
-    wrap.style.cssText = `
-      position: sticky;
-      top: 56px;
-      z-index: 60;
-      margin: 6px 12px;
-      padding: 6px;
-      border-radius: 12px;
-      background: rgba(10,15,20,.55);
-      backdrop-filter: blur(10px);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,.12);
-    `;
-
-    const bar = document.createElement("div");
-    bar.style.cssText = `
-      height: 12px;
-      border-radius: 999px;
-      background: rgba(255,255,255,.10);
-      overflow: hidden;
-    `;
-
-    const fill = document.createElement("div");
-    fill.id = "nutrientFill";
-    fill.style.cssText = `
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg,#2aff88,#6cfaff,#a78bfa);
-      box-shadow: 0 0 12px rgba(140,255,200,.8);
-      transition: width .25s ease;
-    `;
-
-    bar.appendChild(fill);
-    wrap.appendChild(bar);
-
-    document.body.prepend(wrap);
-  }
-
-  ensureNutrientUI();
-
-  /* ---------- Nutrient State ---------- */
-  const Nutrients = {
-    value: 0,
-    cap: 120,
-    orbs: []
-  };
-
-  function updateNutrientUI() {
-    const f = document.getElementById("nutrientFill");
-    if (!f) return;
-    f.style.width = `${Math.min(100, (Nutrients.value / Nutrients.cap) * 100)}%`;
-  }
-
-  /* ---------- World Nutrients ---------- */
-  function spawnNutrient(col) {
-    const a = Math.random() * Math.PI * 2;
-    const d = 180 + Math.random() * 320;
-    Nutrients.orbs.push({
-      x: col.x + Math.cos(a) * d,
-      y: col.y + Math.sin(a) * d,
-      r: 5 + Math.random() * 6,
-      v: 6 + Math.random() * 10,
-      drift: Math.random() * 9999
-    });
-  }
-
-  /* ---------- Hook into existing colony growth ---------- */
-  const __oldTrySplit = window.trySplitByMcap;
-  if (__oldTrySplit) {
-    window.trySplitByMcap = function () {
-      for (const c of window.colonies || []) {
-        if (Math.random() < 0.35) spawnNutrient(c);
-      }
-      return __oldTrySplit.apply(this, arguments);
-    };
-  }
-
-  /* ---------- Worms Seek Nutrients ---------- */
-  function steerToNutrients(col, w) {
-    if (!Nutrients.orbs.length) return null;
-    const h = w.segs?.[0];
-    if (!h) return null;
-
-    let best = null;
-    let bestD = 260;
-
-    for (const n of Nutrients.orbs) {
-      const dx = n.x - h.x;
-      const dy = n.y - h.y;
-      const d = Math.hypot(dx, dy);
-      if (d < bestD) {
-        bestD = d;
-        best = n;
-      }
-    }
-
-    if (!best) return null;
-    return Math.atan2(best.y - h.y, best.x - h.x);
-  }
-
-  /* ---------- Patch worm behavior safely ---------- */
-  const __oldWormBehavior = window.wormBehavior;
-  if (__oldWormBehavior) {
-    window.wormBehavior = function (col, w, time, dt) {
-      const h = w.segs?.[0];
-      if (h) {
-        const ang = steerToNutrients(col, w);
-        if (ang !== null) {
-          h.a = h.a * 0.82 + ang * 0.18;
-        }
-      }
-      return __oldWormBehavior.apply(this, arguments);
-    };
-  }
-
-  /* ---------- Nutrient Consumption ---------- */
-  function consumeNutrients() {
-    for (const c of window.colonies || []) {
-      for (const w of c.worms || []) {
-        const h = w.segs?.[0];
-        if (!h) continue;
-
-        for (let i = Nutrients.orbs.length - 1; i >= 0; i--) {
-          const n = Nutrients.orbs[i];
-          if (Math.hypot(h.x - n.x, h.y - n.y) < n.r + 10) {
-            Nutrients.orbs.splice(i, 1);
-            Nutrients.value = Math.min(Nutrients.cap, Nutrients.value + n.v);
-
-            // ECONOMY FEEDBACK
-            window.buyers += 1;
-            window.volume += n.v * 120;
-            window.mcap += n.v * 260;
-          }
-        }
-      }
-    }
-  }
-
-  /* ---------- Draw Nutrients ---------- */
-  const __oldRender = window.render;
-  if (__oldRender) {
-    window.render = function (time) {
-      __oldRender.apply(this, arguments);
-
-      const ctx = window.ctx;
-      if (!ctx) return;
-
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      for (const n of Nutrients.orbs) {
-        const p = 0.6 + 0.4 * Math.sin(time * 0.003 + n.drift);
-        const g = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.r * 4);
-        g.addColorStop(0, `rgba(140,255,200,${0.9 * p})`);
-        g.addColorStop(1, "rgba(140,255,200,0)");
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, n.r * 4, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    };
-  }
-
-  /* ---------- Cinematic Boss Spawn Camera ---------- */
-  let camTween = null;
-
-  function bossCameraPull(x, y) {
-    camTween = {
-      t: 0,
-      dur: 2.5,
-      sx: window.camX,
-      sy: window.camY,
-      sz: window.zoom,
-      tx: -x,
-      ty: -y,
-      tz: Math.min(window.zoom * 1.25, 2.2)
-    };
-  }
-
-  const __oldCheckMilestones = window.checkMilestones;
-  if (__oldCheckMilestones) {
-    window.checkMilestones = function () {
-      const before = (window.colonies?.[0]?.worms || []).length;
-      __oldCheckMilestones.apply(this, arguments);
-      const after = (window.colonies?.[0]?.worms || []).length;
-
-      if (after > before) {
-        const boss = window.colonies[0].worms.at(-1);
-        if (boss?.isBoss && boss.segs?.[0]) {
-          bossCameraPull(boss.segs[0].x, boss.segs[0].y);
-        }
-      }
-    };
-  }
-
-  /* ---------- Camera Tween Update ---------- */
-  const __oldStep = window.step;
-  if (__oldStep) {
-    window.step = function (dt, time) {
-      if (camTween) {
-        camTween.t += dt;
-        const k = Math.min(1, camTween.t / camTween.dur);
-        const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-
-        window.camX = camTween.sx + (camTween.tx - camTween.sx) * e;
-        window.camY = camTween.sy + (camTween.ty - camTween.sy) * e;
-        window.zoom = camTween.sz + (camTween.tz - camTween.sz) * e;
-
-        if (k >= 1) camTween = null;
-      }
-
-      consumeNutrients();
-      updateNutrientUI();
-      return __oldStep.apply(this, arguments);
-    };
-  }
 })();
